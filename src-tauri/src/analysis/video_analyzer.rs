@@ -289,6 +289,16 @@ pub async fn analyze_video_once(
         return Err(format!("更新会话信息失败: {}", e));
     }
 
+    // 异步同步到 Notion（不阻塞主流程）
+    let notion_manager = state.storage_domain.get_notion_manager();
+    if notion_manager.is_enabled().await {
+        // 获取完整的会话信息
+        if let Ok(session) = db.get_session(session_id).await {
+            info!("触发 Notion 同步：会话 {}", session_id);
+            notion_manager.sync_session_async(session).await;
+        }
+    }
+
     Ok(VideoAnalysisOutcome {
         _session_id: session_id,
         segments_count: segments.len(),
