@@ -725,6 +725,16 @@ source: screen-analyzer\n\
         } else {
             summary.daily_highlights.join("\n")
         };
+        let insights = build_week_insights(summary);
+        let insight_text = if insights.is_empty() {
+            "- 暂无摘要".to_string()
+        } else {
+            insights
+                .into_iter()
+                .map(|item| format!("- {}", item))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         let week_index_link = format!("[[Index/weeks-{}.md]]", summary.week_label);
 
         format!(
@@ -758,6 +768,9 @@ source: screen-analyzer\n\
 ## 专注度\n\
 {focus_summary}\n\
 \n\
+## 周报摘要\n\
+{insight_text}\n\
+\n\
 ## 评分说明\n\
 - 专注评分 = 专注占比\n\
 - 投入时长评分：以 480 分钟为 100 分，上限封顶\n\
@@ -784,6 +797,7 @@ source: screen-analyzer\n\
             productivity_score = productivity_score,
             top_categories = summary.top_categories,
             focus_summary = focus_summary,
+            insight_text = insight_text,
             highlights = highlights,
             week_index_link = week_index_link
         )
@@ -1109,6 +1123,42 @@ fn render_week_focus_metrics(metrics: &WeekFocusMetrics) -> String {
         metrics.idle_minutes,
         metrics.other_minutes
     )
+}
+
+fn build_week_insights(summary: &WeekSummaryData) -> Vec<String> {
+    let mut insights = Vec::new();
+    let focus_ratio = summary.focus_metrics.focus_ratio();
+    let productivity_score = summary.focus_metrics.productivity_score();
+    let total_minutes = summary.total_minutes;
+    let avg_session_minutes = summary.avg_session_minutes;
+
+    if focus_ratio >= 70 {
+        insights.push("本周专注度较高，建议保持当前节奏".to_string());
+    } else if focus_ratio <= 40 {
+        insights.push("本周专注度偏低，建议减少高干扰活动".to_string());
+    } else {
+        insights.push("本周专注度处于中等水平，可优化任务切换".to_string());
+    }
+
+    if productivity_score >= 70 {
+        insights.push("生产力评分较高，投入与产出较为平衡".to_string());
+    } else if productivity_score <= 40 {
+        insights.push("生产力评分偏低，需关注投入时长与专注占比".to_string());
+    }
+
+    if total_minutes < 300 {
+        insights.push("本周投入时长偏少，可能处于低负荷状态".to_string());
+    } else if total_minutes >= 1200 {
+        insights.push("本周投入时长较高，注意避免过度疲劳".to_string());
+    }
+
+    if avg_session_minutes < 20 {
+        insights.push("平均会话较短，存在碎片化倾向".to_string());
+    } else if avg_session_minutes >= 60 {
+        insights.push("平均会话较长，体现深度工作趋势".to_string());
+    }
+
+    insights
 }
 
 fn count_context_switches(cards: &[TimelineCardRecord]) -> usize {
