@@ -176,6 +176,8 @@ impl ObsidianExporter {
             .unwrap_or_default();
 
         let timeline_text = render_timeline(&timeline_cards);
+        let metrics = build_session_metrics(&timeline_cards, duration_minutes);
+        let metrics_text = render_metrics(&metrics);
 
         let video_link = if self.config.include_video_link {
             session
@@ -200,6 +202,8 @@ impl ObsidianExporter {
             duration_minutes,
             &tags_text,
             &timeline_text,
+            &metrics_text,
+            &metrics,
             &video_link,
             &screenshots_section,
         );
@@ -309,6 +313,8 @@ source: screen-analyzer\n\
         duration_minutes: i64,
         tags: &str,
         timeline: &str,
+        metrics_text: &str,
+        metrics: &SessionMetrics,
         video_link: &str,
         screenshots_section: &str,
     ) -> String {
@@ -344,6 +350,9 @@ session_id: {session_id}\n\
 start: {start}\n\
 end: {end}\n\
 duration_minutes: {duration}\n\
+timeline_cards: {timeline_cards}\n\
+context_switches: {context_switches}\n\
+fragmentation_level: {fragmentation_level}\n\
 tags: {tags}\n\
 source: screen-analyzer\n\
 ---\n\
@@ -351,6 +360,9 @@ source: screen-analyzer\n\
 # {title}\n\
 \n\
 {summary}\n\
+\n\
+## 指标\n\
+{metrics}\n\
 \n\
 ## 时间线\n\
 {timeline}\n\
@@ -361,9 +373,13 @@ source: screen-analyzer\n\
             start = start,
             end = end,
             duration = duration_minutes,
+            timeline_cards = metrics.timeline_cards,
+            context_switches = metrics.context_switches,
+            fragmentation_level = metrics.fragmentation_level,
             tags = tags,
             title = title,
             summary = summary_text,
+            metrics = metrics_text,
             timeline = timeline,
             video_block = video_block,
             screenshots_block = screenshots_block
@@ -385,6 +401,9 @@ source: screen-analyzer\n\
                 ("summary", summary_text),
                 ("tags", tags.to_string()),
                 ("timeline", timeline.to_string()),
+                ("metrics", metrics_text.to_string()),
+                ("context_switches", metrics.context_switches.to_string()),
+                ("fragmentation_level", metrics.fragmentation_level.to_string()),
                 ("video_link", video_link.to_string()),
                 ("screenshots", screenshots_section.to_string()),
             ],
@@ -484,6 +503,11 @@ source: screen-analyzer\n\
 
         let total_sessions: i32 = activities.iter().map(|a| a.session_count).sum();
         let total_minutes: i32 = activities.iter().map(|a| a.total_duration_minutes).sum();
+        let avg_session_minutes = if total_sessions > 0 {
+            total_minutes / total_sessions
+        } else {
+            0
+        };
 
         let mut category_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -533,6 +557,7 @@ type: screen-analyzer-index\n\
 month: {month}\n\
 total_sessions: {sessions}\n\
 total_minutes: {minutes}\n\
+avg_session_minutes: {avg_session}\n\
 source: screen-analyzer\n\
 ---\n\
 \n\
@@ -541,6 +566,7 @@ source: screen-analyzer\n\
 ## 概览\n\
 - 会话总数：{sessions}\n\
 - 总时长：{minutes} 分钟\n\
+- 平均会话时长：{avg_session} 分钟\n\
 - 主要类别：{top_categories}\n\
 \n\
 ## 每日明细\n\
@@ -548,6 +574,7 @@ source: screen-analyzer\n\
             month = format!("{:04}-{:02}", year, month),
             sessions = total_sessions,
             minutes = total_minutes,
+            avg_session = avg_session_minutes,
             top_categories = top_categories,
             table = table_lines.join("\n")
         );
@@ -587,6 +614,68 @@ fn render_timeline(cards: &[TimelineCardRecord]) -> String {
         lines.push(line);
     }
     lines.join("\n")
+}
+
+/// 会话指标
+struct SessionMetrics {
+    timeline_cards: usize,
+    context_switches: usize,
+    avg_segment_minutes: i64,
+    fragmentation_level: String,
+}
+
+fn build_session_metrics(cards: &[TimelineCardRecord], duration_minutes: i64) -> SessionMetrics {
+    let timeline_cards = cards.len();
+    let context_switches = count_context_switches(cards);
+    let avg_segment_minutes = if timeline_cards == 0 {
+        0
+    } else {
+        (duration_minutes / timeline_cards as i64).max(0)
+    };
+    let fragmentation_level = match context_switches {
+        0..=1 => "低",
+        2..=3 => "中",
+        _ => "高",
+    }
+    .to_string();
+
+    SessionMetrics {
+        timeline_cards,
+        context_switches,
+        avg_segment_minutes,
+        fragmentation_level,
+    }
+}
+
+fn render_metrics(metrics: &SessionMetrics) -> String {
+    if metrics.timeline_cards == 0 {
+        return "暂无指标".to_string();
+    }
+
+    format!(
+        "- 片段数量: {}\n- 上下文切换: {}\n- 平均片段时长: {} 分钟\n- 碎片化等级: {}",
+        metrics.timeline_cards,
+        metrics.context_switches,
+        metrics.avg_segment_minutes,
+        metrics.fragmentation_level
+    )
+}
+
+fn count_context_switches(cards: &[TimelineCardRecord]) -> usize {
+    let mut switches = 0usize;
+    let mut last_category: Option<String> = None;
+
+    for card in cards {
+        let category = card.category.to_lowercase();
+        if let Some(last) = &last_category {
+            if last != &category {
+                switches += 1;
+            }
+        }
+        last_category = Some(category);
+    }
+
+    switches
 }
 
 fn format_time_range(start: &str, end: &str) -> (String, String) {
