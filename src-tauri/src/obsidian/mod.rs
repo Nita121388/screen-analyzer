@@ -635,6 +635,9 @@ source: screen-analyzer\n\
         let distraction_minutes = summary.focus_metrics.distraction_minutes();
         let focus_ratio = summary.focus_metrics.focus_ratio();
         let distraction_ratio = summary.focus_metrics.distraction_ratio();
+        let focus_score = summary.focus_metrics.focus_score();
+        let effort_score = summary.focus_metrics.effort_score();
+        let productivity_score = summary.focus_metrics.productivity_score();
 
         let content = format!(
             "---\n\
@@ -650,6 +653,9 @@ focus_ratio: {focus_ratio}\n\
 distraction_minutes: {distraction_minutes}\n\
 distraction_ratio: {distraction_ratio}\n\
 communication_minutes: {communication_minutes}\n\
+focus_score: {focus_score}\n\
+effort_score: {effort_score}\n\
+productivity_score: {productivity_score}\n\
 source: screen-analyzer\n\
 ---\n\
 \n\
@@ -677,6 +683,9 @@ source: screen-analyzer\n\
             distraction_minutes = distraction_minutes,
             distraction_ratio = distraction_ratio,
             communication_minutes = summary.focus_metrics.communication_minutes,
+            focus_score = focus_score,
+            effort_score = effort_score,
+            productivity_score = productivity_score,
             top_categories = summary.top_categories,
             focus_summary = focus_summary,
             table = summary.table_lines.join("\n")
@@ -708,6 +717,9 @@ source: screen-analyzer\n\
         let distraction_minutes = summary.focus_metrics.distraction_minutes();
         let focus_ratio = summary.focus_metrics.focus_ratio();
         let distraction_ratio = summary.focus_metrics.distraction_ratio();
+        let focus_score = summary.focus_metrics.focus_score();
+        let effort_score = summary.focus_metrics.effort_score();
+        let productivity_score = summary.focus_metrics.productivity_score();
         let highlights = if summary.daily_highlights.is_empty() {
             "- 暂无每日总结".to_string()
         } else {
@@ -729,6 +741,9 @@ focus_ratio: {focus_ratio}\n\
 distraction_minutes: {distraction_minutes}\n\
 distraction_ratio: {distraction_ratio}\n\
 communication_minutes: {communication_minutes}\n\
+focus_score: {focus_score}\n\
+effort_score: {effort_score}\n\
+productivity_score: {productivity_score}\n\
 source: screen-analyzer\n\
 ---\n\
 \n\
@@ -742,6 +757,11 @@ source: screen-analyzer\n\
 \n\
 ## 专注度\n\
 {focus_summary}\n\
+\n\
+## 评分说明\n\
+- 专注评分 = 专注占比\n\
+- 投入时长评分：以 480 分钟为 100 分，上限封顶\n\
+- 生产力评分 = 专注评分 60% + 投入时长评分 40%\n\
 \n\
 ## 每日要点\n\
 {highlights}\n\
@@ -759,6 +779,9 @@ source: screen-analyzer\n\
             distraction_minutes = distraction_minutes,
             distraction_ratio = distraction_ratio,
             communication_minutes = summary.focus_metrics.communication_minutes,
+            focus_score = focus_score,
+            effort_score = effort_score,
+            productivity_score = productivity_score,
             top_categories = summary.top_categories,
             focus_summary = focus_summary,
             highlights = highlights,
@@ -1010,6 +1033,22 @@ impl WeekFocusMetrics {
             (self.distraction_minutes() * 100 / self.total_minutes).max(0)
         }
     }
+
+    fn effort_score(&self) -> i64 {
+        if self.total_minutes == 0 {
+            return 0;
+        }
+        let score = self.total_minutes * 100 / 480;
+        score.min(100).max(0)
+    }
+
+    fn focus_score(&self) -> i64 {
+        self.focus_ratio()
+    }
+
+    fn productivity_score(&self) -> i64 {
+        (self.focus_score() * 60 + self.effort_score() * 40) / 100
+    }
 }
 
 fn build_session_metrics(cards: &[TimelineCardRecord], duration_minutes: i64) -> SessionMetrics {
@@ -1055,12 +1094,15 @@ fn render_week_focus_metrics(metrics: &WeekFocusMetrics) -> String {
     }
 
     format!(
-        "- 专注时长: {} 分钟 ({}%)\n- 沟通时长: {} 分钟\n- 分心时长: {} 分钟 ({}%)\n- 细分: 工作 {} / 学习 {} / 个人 {} / 空闲 {} / 其他 {}",
+        "- 专注时长: {} 分钟 ({}%)\n- 沟通时长: {} 分钟\n- 分心时长: {} 分钟 ({}%)\n- 专注评分: {} / 100\n- 投入时长评分: {} / 100\n- 生产力评分: {} / 100\n- 细分: 工作 {} / 学习 {} / 个人 {} / 空闲 {} / 其他 {}",
         metrics.focus_minutes(),
         metrics.focus_ratio(),
         metrics.communication_minutes,
         metrics.distraction_minutes(),
         metrics.distraction_ratio(),
+        metrics.focus_score(),
+        metrics.effort_score(),
+        metrics.productivity_score(),
         metrics.work_minutes,
         metrics.learning_minutes,
         metrics.personal_minutes,
