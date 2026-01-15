@@ -31,11 +31,11 @@ npm run preview      # 预览构建结果
 - **数据库**: SQLite (通过 sqlx)
 - **关键库**: screenshots (截屏), image (图像处理), reqwest (HTTP), tokio (异步)
 
-### 核心模块设计（根据技术方案）
+### 核心模块设计（根据现有实现）
 1. **截屏模块**: 使用 `screenshots` crate 实现 1 FPS 自动截屏
-2. **LLM 分析**: 插件式架构支持 OpenAI/Anthropic 等多种提供商
+2. **LLM 分析**: 插件式架构支持 Qwen / Claude / Codex CLI
 3. **视频处理**: FFmpeg 生成时间线视频
-4. **数据管理**: SQLite 存储，支持自动清理（默认7天）
+4. **数据管理**: SQLite/MariaDB 存储，支持自动清理（默认7天）
 
 ### 项目结构
 - `src/`: Vue 3 前端应用
@@ -46,5 +46,5 @@ npm run preview      # 预览构建结果
 ### 开发注意事项
 - 应用需要屏幕录制权限（macOS）
 - Vite 开发服务器端口: 1420, HMR 端口: 1421
-- 当前处于初始模板状态，核心功能待实现
+- 已实现截屏、视频生成、LLM 分析、存储、Notion 同步等核心链路
 - 详细技术方案见 `技术路线说明.md`

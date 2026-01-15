@@ -1,16 +1,16 @@
 # AI 开发执行手册
 
 ## 环境准备
-- 安装 Node.js 18+、Rust 1.75+、FFmpeg，并执行 `npm install` 与 `cargo fetch`，验证 `npm run tauri dev` 能正常启动。
+- 安装 Node.js 18+、Rust 1.75+、FFmpeg，并执行 `npm install` 与 `cargo fetch`；运行与联调由人工完成。
 - 为选定的 LLM 提供商准备 API Key，通过 `.env` 或安全密钥服务注入，避免硬编码在仓库中。
 - 确认工作目录 `src-tauri/` 可写入 `frames/`、数据库与视频输出目录，必要时在启动流程中创建。
 
 ## 核心开发任务
 ### Rust 后端
-- 按《技术路线说明》在 `src-tauri/src/` 下补全 `capture/`, `video/`, `llm/`, `storage/`, `models/` 模块，所有公共接口集中在 `lib.rs` 并通过 Tauri 命令暴露。
-- 实现 `ScreenCapture` 支持多屏枚举、1920×1080 JPG 输出、毫秒时间戳命名；`CaptureScheduler` 使用 Tokio 定时任务调度截屏、触发 LLM 分析并写入数据库。
-- 设计 `LLMProvider` trait 及 `OpenAIProvider`、`AnthropicProvider`，支持 30 秒帧采样、Vision API 调用、JSON 解析为 `SessionSummary`，允许动态注册与切换。
-- 在 `video::VideoProcessor` 中调用 FFmpeg 生成 20 倍速回放；临时帧清单需安全创建并在任务完成后清理。
+- 按《技术路线说明》在 `src-tauri/src/` 下维护 `capture/`, `video/`, `llm/`, `storage/`, `models/` 等模块，公共接口集中在 `lib.rs` 并通过 Tauri 命令暴露。
+- `ScreenCapture` 支持多屏枚举、可配置分辨率 JPG 输出、毫秒时间戳命名；`CaptureScheduler` 使用 Tokio 定时任务调度截屏、触发 LLM 分析并写入数据库。
+- `LLMProvider` trait 及 `QwenProvider`、`ClaudeProvider`、`CodexProvider` 支持采样、JSON 解析为 `SessionSummary`，允许动态注册与切换。
+- 在 `video::VideoProcessor` 中调用 FFmpeg 生成回放；速率与质量以配置为准，临时帧清单需安全创建并在任务完成后清理。
 - `storage::Database` 使用 SQLx 创建 `sessions`、`frames` 表，提供按日期查询、详情、标签增补；`StorageCleaner` 每小时清理超过保留期的数据并验证 `retention_days` 合法。
 
 ### 前端实现
@@ -31,9 +31,9 @@
 - Code Review 关注异步安全、错误处理、资源释放、UI 状态边界；提出改进建议后等待修改再通过。
 
 ## 测试与验证
-- Rust：为 `capture`、`storage`、`llm` 编写单元或集成测试（`*_test.rs`），并运行 `cargo test`；关键异步逻辑使用 `#[tokio::test]`。
+- Rust：为 `capture`、`storage`、`llm` 编写单元或集成测试（`*_test.rs`），仅编译测试（如 `cargo test --no-run`）；关键异步逻辑使用 `#[tokio::test]`。
 - 前端：引入 Vitest/Cypress 后提供 `npm run test`，覆盖组件渲染、事件交互、API 调用 mock；必要时补充端到端脚本。
-- 端到端联调：运行 `npm run tauri dev` 验证截屏→存储→分析→展示闭环；检查 Windows/macOS 打包命令与产物。
+- 端到端联调：`npm run tauri dev` 由人工运行验证截屏→存储→分析→展示闭环；检查 Windows/macOS 打包命令与产物。
 - 性能与资源：长时间运行确认截图与清理任务稳定，确保临时文件删除、LLM 失败时给出提示并不中断主流程。
 
 ## 自我检查清单

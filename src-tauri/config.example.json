@@ -1,31 +1,68 @@
 {
-  "llm": {
-    "qwen": {
-      "api_key": "sk-xxxxxxxxxxxx"
-      // model, base_url, use_video_mode 都有默认值
-    },
-    "analysis_params": {
-      "frame_sampling_interval": 30,
-      "max_frames_per_analysis": 15,
-      "include_detailed_description": true,
-      "confidence_threshold": 0.5
-    }
-  },
-  "capture": {
-    "fps": 1,
-    "quality": 0.8,
-    "session_duration_minutes": 15
-  },
-  "video": {
+  "retention_days": 7,
+  "llm_provider": "openai",
+  "capture_interval": 1,
+  "summary_interval": 15,
+  "video_config": {
     "auto_generate": true,
     "speed_multiplier": 8.0,
     "quality": 23,
-    "add_timestamp": true,
-    "format": "mp4"
+    "add_timestamp": true
   },
-  "storage": {
-    "retention_days": 7,
-    "auto_cleanup_enabled": true,
-    "cleanup_interval_hours": 24
+  "ui_settings": {
+    "theme": "dark",
+    "language": "zh-CN",
+    "show_tray": true,
+    "auto_start": false,
+    "hotkeys": {
+      "toggle_capture": "Cmd+Shift+P",
+      "manual_summary": "Cmd+Shift+S",
+      "toggle_window": "Cmd+Shift+A"
+    }
+  },
+  "llm_config": {
+    "api_key": "",
+    "model": "qwen-vl-max-latest",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "use_video_mode": true,
+    "auth_token": "",
+    "codex_config": {
+      "binary_path": "codex",
+      "model": "",
+      "profile": "",
+      "sandbox_mode": "workspace-write",
+      "approval_policy": "on-request",
+      "extra_args": [],
+      "max_images": 16,
+      "timeout_secs": 600
+    }
+  },
+  "capture_settings": {
+    "resolution": "1080p",
+    "image_quality": 85,
+    "detect_black_screen": true,
+    "black_screen_threshold": 5
+  },
+  "logger_settings": {
+    "enable_frontend_logging": true,
+    "log_level": "info",
+    "max_log_buffer": 1000
+  },
+  "database_config": {
+    "type": "sqlite",
+    "db_path": "data/screen-analyzer.db"
+  },
+  "notion_config": {
+    "enabled": false,
+    "api_token": "",
+    "database_id": "",
+    "sync_options": {
+      "sync_sessions": true,
+      "sync_videos": false,
+      "sync_daily_summary": false,
+      "sync_screenshots": true,
+      "video_size_limit_mb": 5
+    },
+    "max_retries": 3
   }
 }
