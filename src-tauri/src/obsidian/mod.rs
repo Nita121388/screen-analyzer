@@ -23,6 +23,7 @@ pub struct ExportOutcome {
     pub session_paths: Vec<PathBuf>,
     pub index_note_path: Option<PathBuf>,
     pub week_index_path: Option<PathBuf>,
+    pub weekly_note_path: Option<PathBuf>,
     pub warnings: Vec<String>,
 }
 
@@ -40,6 +41,10 @@ impl ExportOutcome {
         }
         if let Some(path) = &self.week_index_path {
             message.push_str("\n周索引文件: ");
+            message.push_str(&path.to_string_lossy());
+        }
+        if let Some(path) = &self.weekly_note_path {
+            message.push_str("\n周报文件: ");
             message.push_str(&path.to_string_lossy());
         }
         if !self.warnings.is_empty() {
@@ -134,19 +139,39 @@ impl ObsidianExporter {
             }
         };
 
-        let week_index_path = match self.export_week_index(db.as_ref(), date, &root).await {
-            Ok(path) => Some(path),
-            Err(err) => {
-                warnings.push(format!("周索引生成失败: {}", err));
-                None
-            }
-        };
+        let (week_index_path, weekly_note_path) =
+            match self.build_week_summary(db.as_ref(), date).await {
+                Ok(summary) => {
+                    let index_path = match self.export_week_index_with_summary(&summary, &root).await
+                    {
+                        Ok(path) => Some(path),
+                        Err(err) => {
+                            warnings.push(format!("周索引生成失败: {}", err));
+                            None
+                        }
+                    };
+                    let weekly_note_path =
+                        match self.export_weekly_note_with_summary(&summary, &root).await {
+                            Ok(path) => Some(path),
+                            Err(err) => {
+                                warnings.push(format!("周报生成失败: {}", err));
+                                None
+                            }
+                        };
+                    (index_path, weekly_note_path)
+                }
+                Err(err) => {
+                    warnings.push(format!("周报数据生成失败: {}", err));
+                    (None, None)
+                }
+            };
 
         Ok(ExportOutcome {
             daily_note_path,
             session_paths,
             index_note_path,
             week_index_path,
+            weekly_note_path,
             warnings,
         })
     }
@@ -600,12 +625,152 @@ source: screen-analyzer\n\
         export_index_file(&index_path, content).await
     }
 
-    async fn export_week_index(
+    async fn export_week_index_with_summary(
+        &self,
+        summary: &WeekSummaryData,
+        root: &Path,
+    ) -> Result<PathBuf> {
+        let focus_summary = render_week_focus_metrics(&summary.focus_metrics);
+        let focus_minutes = summary.focus_metrics.focus_minutes();
+        let distraction_minutes = summary.focus_metrics.distraction_minutes();
+        let focus_ratio = summary.focus_metrics.focus_ratio();
+        let distraction_ratio = summary.focus_metrics.distraction_ratio();
+
+        let content = format!(
+            "---\n\
+type: screen-analyzer-week-index\n\
+week: {week}\n\
+week_start: {week_start}\n\
+week_end: {week_end}\n\
+total_sessions: {sessions}\n\
+total_minutes: {minutes}\n\
+avg_session_minutes: {avg_session}\n\
+focus_minutes: {focus_minutes}\n\
+focus_ratio: {focus_ratio}\n\
+distraction_minutes: {distraction_minutes}\n\
+distraction_ratio: {distraction_ratio}\n\
+communication_minutes: {communication_minutes}\n\
+source: screen-analyzer\n\
+---\n\
+\n\
+# {week} 周度索引\n\
+\n\
+## 概览\n\
+- 会话总数：{sessions}\n\
+- 总时长：{minutes} 分钟\n\
+- 平均会话时长：{avg_session} 分钟\n\
+- 主要类别：{top_categories}\n\
+\n\
+## 专注度\n\
+{focus_summary}\n\
+\n\
+## 每日明细\n\
+{table}\n",
+            week = summary.week_label,
+            week_start = summary.week_start,
+            week_end = summary.week_end,
+            sessions = summary.total_sessions,
+            minutes = summary.total_minutes,
+            avg_session = summary.avg_session_minutes,
+            focus_minutes = focus_minutes,
+            focus_ratio = focus_ratio,
+            distraction_minutes = distraction_minutes,
+            distraction_ratio = distraction_ratio,
+            communication_minutes = summary.focus_metrics.communication_minutes,
+            top_categories = summary.top_categories,
+            focus_summary = focus_summary,
+            table = summary.table_lines.join("\n")
+        );
+
+        let index_path = root
+            .join("Index")
+            .join(format!("weeks-{}.md", summary.week_label));
+        export_index_file(&index_path, content).await
+    }
+
+    async fn export_weekly_note_with_summary(
+        &self,
+        summary: &WeekSummaryData,
+        root: &Path,
+    ) -> Result<PathBuf> {
+        let weekly_dir = root.join("Weekly");
+        fs::create_dir_all(&weekly_dir).await?;
+
+        let weekly_path = weekly_dir.join(format!("{}.md", summary.week_label));
+        let content = self.render_weekly_note(summary);
+        fs::write(&weekly_path, content).await?;
+        Ok(weekly_path)
+    }
+
+    fn render_weekly_note(&self, summary: &WeekSummaryData) -> String {
+        let focus_summary = render_week_focus_metrics(&summary.focus_metrics);
+        let focus_minutes = summary.focus_metrics.focus_minutes();
+        let distraction_minutes = summary.focus_metrics.distraction_minutes();
+        let focus_ratio = summary.focus_metrics.focus_ratio();
+        let distraction_ratio = summary.focus_metrics.distraction_ratio();
+        let highlights = if summary.daily_highlights.is_empty() {
+            "- 暂无每日总结".to_string()
+        } else {
+            summary.daily_highlights.join("\n")
+        };
+        let week_index_link = format!("[[Index/weeks-{}.md]]", summary.week_label);
+
+        format!(
+            "---\n\
+type: screen-analyzer-weekly\n\
+week: {week}\n\
+week_start: {week_start}\n\
+week_end: {week_end}\n\
+total_sessions: {sessions}\n\
+total_minutes: {minutes}\n\
+avg_session_minutes: {avg_session}\n\
+focus_minutes: {focus_minutes}\n\
+focus_ratio: {focus_ratio}\n\
+distraction_minutes: {distraction_minutes}\n\
+distraction_ratio: {distraction_ratio}\n\
+communication_minutes: {communication_minutes}\n\
+source: screen-analyzer\n\
+---\n\
+\n\
+# {week} 周报\n\
+\n\
+## 概览\n\
+- 会话总数：{sessions}\n\
+- 总时长：{minutes} 分钟\n\
+- 平均会话时长：{avg_session} 分钟\n\
+- 主要类别：{top_categories}\n\
+\n\
+## 专注度\n\
+{focus_summary}\n\
+\n\
+## 每日要点\n\
+{highlights}\n\
+\n\
+## 周索引\n\
+- {week_index_link}\n",
+            week = summary.week_label,
+            week_start = summary.week_start,
+            week_end = summary.week_end,
+            sessions = summary.total_sessions,
+            minutes = summary.total_minutes,
+            avg_session = summary.avg_session_minutes,
+            focus_minutes = focus_minutes,
+            focus_ratio = focus_ratio,
+            distraction_minutes = distraction_minutes,
+            distraction_ratio = distraction_ratio,
+            communication_minutes = summary.focus_metrics.communication_minutes,
+            top_categories = summary.top_categories,
+            focus_summary = focus_summary,
+            highlights = highlights,
+            week_index_link = week_index_link
+        )
+    }
+
+    async fn build_week_summary(
         &self,
         db: &Database,
         date: &str,
-        root: &Path,
-    ) -> Result<PathBuf> {
+    ) -> Result<WeekSummaryData> {
         let day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .map_err(|_| anyhow!("日期格式错误: {}", date))?;
         let iso_week = day.iso_week();
@@ -638,11 +803,6 @@ source: screen-analyzer\n\
         let focus_metrics = self
             .compute_week_focus_metrics(db, week_start, week_end)
             .await;
-        let focus_minutes = focus_metrics.focus_minutes();
-        let distraction_minutes = focus_metrics.distraction_minutes();
-        let focus_ratio = focus_metrics.focus_ratio();
-        let distraction_ratio = focus_metrics.distraction_ratio();
-        let focus_summary = render_week_focus_metrics(&focus_metrics);
 
         let mut category_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -686,57 +846,31 @@ source: screen-analyzer\n\
             }
         }
 
-        let week_label = format!("{:04}-W{:02}", week_year, week_number);
-        let content = format!(
-            "---\n\
-type: screen-analyzer-week-index\n\
-week: {week}\n\
-week_start: {week_start}\n\
-week_end: {week_end}\n\
-total_sessions: {sessions}\n\
-total_minutes: {minutes}\n\
-avg_session_minutes: {avg_session}\n\
-focus_minutes: {focus_minutes}\n\
-focus_ratio: {focus_ratio}\n\
-distraction_minutes: {distraction_minutes}\n\
-distraction_ratio: {distraction_ratio}\n\
-communication_minutes: {communication_minutes}\n\
-source: screen-analyzer\n\
----\n\
-\n\
-# {week} 周度索引\n\
-\n\
-## 概览\n\
-- 会话总数：{sessions}\n\
-- 总时长：{minutes} 分钟\n\
-- 平均会话时长：{avg_session} 分钟\n\
-- 主要类别：{top_categories}\n\
-\n\
-## 专注度\n\
-{focus_summary}\n\
-\n\
-## 每日明细\n\
-{table}\n",
-            week = week_label,
-            week_start = start_date,
-            week_end = end_date,
-            sessions = total_sessions,
-            minutes = total_minutes,
-            avg_session = avg_session_minutes,
-            focus_minutes = focus_minutes,
-            focus_ratio = focus_ratio,
-            distraction_minutes = distraction_minutes,
-            distraction_ratio = distraction_ratio,
-            communication_minutes = focus_metrics.communication_minutes,
-            top_categories = top_categories,
-            focus_summary = focus_summary,
-            table = table_lines.join("\n")
-        );
+        let mut daily_highlights = Vec::new();
+        let mut cursor = week_start;
+        while cursor <= week_end {
+            let date_text = cursor.format("%Y-%m-%d").to_string();
+            let link = format!("[[Daily/{}]]", date_text);
+            let summary_text = match db.get_day_summary(&date_text).await {
+                Ok(Some(summary)) => compact_summary_text(&summary.summary_text, 140),
+                _ => "暂无总结".to_string(),
+            };
+            daily_highlights.push(format!("- {}: {}", link, summary_text));
+            cursor += chrono::Duration::days(1);
+        }
 
-        let index_path = root
-            .join("Index")
-            .join(format!("weeks-{}.md", week_label));
-        export_index_file(&index_path, content).await
+        Ok(WeekSummaryData {
+            week_label: format!("{:04}-W{:02}", week_year, week_number),
+            week_start: start_date,
+            week_end: end_date,
+            total_sessions,
+            total_minutes,
+            avg_session_minutes,
+            top_categories,
+            table_lines,
+            focus_metrics,
+            daily_highlights,
+        })
     }
 
     async fn compute_week_focus_metrics(
@@ -814,6 +948,19 @@ struct WeekFocusMetrics {
     personal_minutes: i64,
     idle_minutes: i64,
     other_minutes: i64,
+}
+
+struct WeekSummaryData {
+    week_label: String,
+    week_start: String,
+    week_end: String,
+    total_sessions: i32,
+    total_minutes: i32,
+    avg_session_minutes: i32,
+    top_categories: String,
+    table_lines: Vec<String>,
+    focus_metrics: WeekFocusMetrics,
+    daily_highlights: Vec<String>,
 }
 
 impl WeekFocusMetrics {
@@ -937,6 +1084,15 @@ fn count_context_switches(cards: &[TimelineCardRecord]) -> usize {
     }
 
     switches
+}
+
+fn compact_summary_text(text: &str, max_len: usize) -> String {
+    let cleaned = text.replace('\n', " ").replace('\r', " ");
+    if cleaned.chars().count() <= max_len {
+        return cleaned;
+    }
+    let truncated: String = cleaned.chars().take(max_len).collect();
+    format!("{}...", truncated)
 }
 
 fn normalize_timeline_category(raw: &str) -> ActivityCategory {

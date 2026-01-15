@@ -23,6 +23,8 @@
     Index/
       sessions-2025-01.md (可选)
       weeks-2025-W03.md (可选)
+    Weekly/
+      2025-W03.md (可选)
 ```
 
 ## Markdown 模板（建议）
