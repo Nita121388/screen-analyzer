@@ -744,6 +744,74 @@
         </el-dialog>
       </el-tab-pane>
 
+      <!-- Obsidian 导出 -->
+      <el-tab-pane label="Obsidian 导出" name="obsidian">
+        <el-form :model="obsidianConfig" label-width="140px">
+          <el-form-item label="启用导出">
+            <el-switch v-model="obsidianConfig.enabled" />
+            <span class="form-tip">将每日总结与会话导出到 Obsidian</span>
+          </el-form-item>
+
+          <el-form-item label="Vault 路径">
+            <el-input
+              v-model="obsidianConfig.vault_path"
+              placeholder="例如 D:\\ObsidianVault 或 /Users/me/Vault"
+              :disabled="!obsidianConfig.enabled"
+            />
+            <span class="form-tip">填写 Obsidian Vault 根目录</span>
+          </el-form-item>
+
+          <el-form-item label="根目录名">
+            <el-input
+              v-model="obsidianConfig.root_folder"
+              placeholder="ScreenAnalyzer"
+              :disabled="!obsidianConfig.enabled"
+            />
+            <span class="form-tip">导出内容将写入 Vault 下的该目录</span>
+          </el-form-item>
+
+          <el-form-item label="导出模式">
+            <el-select
+              v-model="obsidianConfig.export_mode"
+              :disabled="!obsidianConfig.enabled"
+              style="width: 200px"
+            >
+              <el-option value="link" label="仅链接" />
+              <el-option value="copy" label="复制文件" />
+            </el-select>
+            <span class="form-tip">默认仅写入链接，避免占用大量空间</span>
+          </el-form-item>
+
+          <el-form-item label="包含截图">
+            <el-switch
+              v-model="obsidianConfig.include_screenshots"
+              :disabled="!obsidianConfig.enabled"
+            />
+            <span class="form-tip">仅导出关键截图（首尾帧）</span>
+          </el-form-item>
+
+          <el-form-item label="包含视频链接">
+            <el-switch
+              v-model="obsidianConfig.include_video_link"
+              :disabled="!obsidianConfig.enabled"
+            />
+            <span class="form-tip">仅写入视频路径链接</span>
+          </el-form-item>
+
+          <el-form-item label="立即导出">
+            <el-button
+              type="primary"
+              :loading="exportingObsidian"
+              :disabled="!obsidianConfig.enabled"
+              @click="exportObsidianDay"
+            >
+              导出今日
+            </el-button>
+            <span class="form-tip">导出当前选中日期的总结与会话</span>
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+
       <!-- 关于 -->
       <el-tab-pane label="关于" name="about">
         <div class="about-content">
@@ -904,6 +972,18 @@ const notionConfig = reactive({
   max_retries: 3
 })
 
+// Obsidian 配置
+const obsidianConfig = reactive({
+  enabled: false,
+  vault_path: '',
+  root_folder: 'ScreenAnalyzer',
+  export_mode: 'link',
+  include_screenshots: false,
+  include_video_link: true,
+  daily_template: '',
+  session_template: ''
+})
+
 const testingNotion = ref(false)
 const loadingAnthropicEnv = ref(false)
 const notionPages = ref([])
@@ -917,6 +997,7 @@ const selectedPageForDatabase = computed(() => {
 const creatingNotionDatabase = ref(false)
 const createDatabaseDialogVisible = ref(false)
 const newDatabaseName = ref('Screen Analyzer 会话记录')
+const exportingObsidian = ref(false)
 
 // 格式化质量提示
 const formatQuality = (value) => {
@@ -1249,6 +1330,30 @@ const createNotionDatabase = async () => {
   }
 }
 
+// 导出 Obsidian（当前选中日期）
+const exportObsidianDay = async () => {
+  if (!obsidianConfig.enabled) {
+    ElMessage.warning('请先启用 Obsidian 导出')
+    return
+  }
+  if (!obsidianConfig.vault_path) {
+    ElMessage.warning('请先填写 Vault 路径')
+    return
+  }
+
+  exportingObsidian.value = true
+  try {
+    const result = await invoke('export_obsidian_day', {
+      date: store.selectedDate
+    })
+    ElMessage.success(result)
+  } catch (error) {
+    ElMessage.error('导出失败: ' + error)
+  } finally {
+    exportingObsidian.value = false
+  }
+}
+
 // 清空日志
 const clearLogs = () => {
   logs.value = []
@@ -1272,6 +1377,13 @@ const saveSettings = async () => {
     const loggerSettingsPayload = JSON.parse(JSON.stringify(settings.logger_settings))
     const databaseConfigPayload = buildDatabaseConfig()
     const notionConfigPayload = JSON.parse(JSON.stringify(notionConfig))
+    const obsidianConfigPayload = JSON.parse(JSON.stringify(obsidianConfig))
+    if (!obsidianConfigPayload.daily_template || !obsidianConfigPayload.daily_template.trim()) {
+      obsidianConfigPayload.daily_template = null
+    }
+    if (!obsidianConfigPayload.session_template || !obsidianConfigPayload.session_template.trim()) {
+      obsidianConfigPayload.session_template = null
+    }
 
     // 保存基础设置
     await store.updateConfig({
@@ -1284,7 +1396,8 @@ const saveSettings = async () => {
       ui_settings: settings.ui_settings,
       logger_settings: loggerSettingsPayload,
       database_config: databaseConfigPayload,
-      notion_config: notionConfigPayload
+      notion_config: notionConfigPayload,
+      obsidian_config: obsidianConfigPayload
     })
 
     // 配置LLM提供商
@@ -1467,6 +1580,19 @@ const initSettings = () => {
       Object.assign(notionConfig.sync_options, notion_config.sync_options)
     }
     notionConfig.max_retries = notion_config.max_retries || 3
+  }
+
+  // 加载 Obsidian 配置
+  const { obsidian_config } = store.appConfig
+  if (obsidian_config) {
+    obsidianConfig.enabled = obsidian_config.enabled || false
+    obsidianConfig.vault_path = obsidian_config.vault_path || ''
+    obsidianConfig.root_folder = obsidian_config.root_folder || 'ScreenAnalyzer'
+    obsidianConfig.export_mode = obsidian_config.export_mode || 'link'
+    obsidianConfig.include_screenshots = obsidian_config.include_screenshots || false
+    obsidianConfig.include_video_link = obsidian_config.include_video_link !== false
+    obsidianConfig.daily_template = obsidian_config.daily_template || ''
+    obsidianConfig.session_template = obsidian_config.session_template || ''
   }
 }
 

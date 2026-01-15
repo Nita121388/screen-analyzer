@@ -9,6 +9,7 @@ pub mod llm;
 pub mod logger;
 pub mod models;
 pub mod notion;
+pub mod obsidian;
 pub mod settings;
 pub mod storage;
 pub mod video;
@@ -26,6 +27,7 @@ use domains::{AnalysisDomain, CaptureDomain, StorageDomain, SystemDomain};
 use event_bus::EventBus;
 use llm::{plugin::LLMProvider, CodexProvider, LLMManager};
 use models::*;
+use obsidian::ObsidianExporter;
 use settings::SettingsManager;
 use storage::{Database, StorageCleaner};
 use video::VideoProcessor;
@@ -143,6 +145,35 @@ async fn get_day_summary(
     generator
         .generate_day_summary(&date, force_refresh.unwrap_or(false))
         .await
+}
+
+/// 导出指定日期到 Obsidian
+#[tauri::command]
+async fn export_obsidian_day(
+    state: tauri::State<'_, AppState>,
+    date: String,
+    force_refresh: Option<bool>,
+) -> Result<String, String> {
+    let config = state.storage_domain.get_settings().get().await;
+    let obsidian_config = config.obsidian_config.unwrap_or_default();
+
+    if !obsidian_config.enabled {
+        return Err("Obsidian 导出未启用，请在设置中开启".to_string());
+    }
+
+    if obsidian_config.vault_path.trim().is_empty() {
+        return Err("请先配置 Obsidian Vault 路径".to_string());
+    }
+
+    let db = state.storage_domain.get_db().await?;
+    let llm_handle = state.analysis_domain.get_llm_handle();
+    let exporter = ObsidianExporter::new(obsidian_config);
+    let result = exporter
+        .export_day(db, llm_handle, &date, force_refresh.unwrap_or(false))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result.render_message())
 }
 
 /// 获取会话详情
@@ -2863,6 +2894,7 @@ pub fn run() {
             get_activities,
             get_day_sessions,
             get_day_summary,
+            export_obsidian_day,
             get_session_detail,
             get_app_config,
             update_config,

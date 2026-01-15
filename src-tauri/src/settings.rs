@@ -74,6 +74,9 @@ impl SettingsManager {
         if let Some(notion) = update.notion_config {
             config.notion_config = Some(notion);
         }
+        if let Some(obsidian) = update.obsidian_config {
+            config.obsidian_config = Some(obsidian);
+        }
 
         self.save(&config).await?;
         Ok(config.clone())

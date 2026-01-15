@@ -203,8 +203,15 @@ const handleDateChange = (date) => {
 }
 
 // 处理导出
-const handleExport = () => {
-  ElMessage.info('导出功能开发中...')
+const handleExport = async () => {
+  try {
+    const result = await invoke('export_obsidian_day', {
+      date: store.selectedDate
+    })
+    ElMessage.success(result)
+  } catch (error) {
+    ElMessage.error('导出失败: ' + error)
+  }
 }
 
 // 处理会话点击

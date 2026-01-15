@@ -64,5 +64,15 @@
       "video_size_limit_mb": 5
     },
     "max_retries": 3
+  },
+  "obsidian_config": {
+    "enabled": false,
+    "vault_path": "",
+    "root_folder": "ScreenAnalyzer",
+    "export_mode": "link",
+    "include_screenshots": false,
+    "include_video_link": true,
+    "daily_template": null,
+    "session_template": null
   }
 }

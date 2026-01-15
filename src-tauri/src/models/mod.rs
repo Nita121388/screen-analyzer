@@ -32,6 +32,8 @@ pub struct AppConfig {
     pub database_config: Option<DatabaseConfig>,
     /// Notion 配置
     pub notion_config: Option<NotionConfig>,
+    /// Obsidian 导出配置
+    pub obsidian_config: Option<ObsidianExportConfig>,
 }
 
 /// 日志设置
@@ -162,6 +164,8 @@ pub struct PersistedAppConfig {
     pub database_config: Option<DatabaseConfig>,
     /// Notion 配置
     pub notion_config: Option<NotionConfig>,
+    /// Obsidian 导出配置
+    pub obsidian_config: Option<ObsidianExportConfig>,
 }
 
 impl Default for PersistedAppConfig {
@@ -178,6 +182,7 @@ impl Default for PersistedAppConfig {
             logger_settings: Some(LoggerSettings::default()),
             database_config: None,
             notion_config: Some(NotionConfig::default()),
+            obsidian_config: Some(ObsidianExportConfig::default()),
         }
     }
 }
@@ -537,6 +542,56 @@ impl Default for NotionSyncOptions {
             sync_daily_summary: false, // 默认不同步每日总结（Notion 会自动总结）
             sync_screenshots: true,
             video_size_limit_mb: 5,
+        }
+    }
+}
+
+/// Obsidian 导出模式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ObsidianExportMode {
+    Link,
+    Copy,
+}
+
+impl Default for ObsidianExportMode {
+    fn default() -> Self {
+        Self::Link
+    }
+}
+
+/// Obsidian 导出配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObsidianExportConfig {
+    /// 是否启用导出
+    pub enabled: bool,
+    /// Vault 根路径
+    pub vault_path: String,
+    /// 根目录名（相对 Vault）
+    pub root_folder: String,
+    /// 导出模式（link/copy）
+    pub export_mode: ObsidianExportMode,
+    /// 是否包含截图
+    pub include_screenshots: bool,
+    /// 是否包含视频链接
+    pub include_video_link: bool,
+    /// 自定义每日模板（可选）
+    pub daily_template: Option<String>,
+    /// 自定义会话模板（可选）
+    pub session_template: Option<String>,
+}
+
+impl Default for ObsidianExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            vault_path: String::new(),
+            root_folder: "ScreenAnalyzer".to_string(),
+            export_mode: ObsidianExportMode::Link,
+            include_screenshots: false,
+            include_video_link: true,
+            daily_template: None,
+            session_template: None,
         }
     }
 }

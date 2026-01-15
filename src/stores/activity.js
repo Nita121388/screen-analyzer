@@ -44,7 +44,17 @@ export const useActivityStore = defineStore('activity', {
         quality: 23,
         add_timestamp: true
       },
-      ui_settings: null
+      ui_settings: null,
+      obsidian_config: {
+        enabled: false,
+        vault_path: '',
+        root_folder: 'ScreenAnalyzer',
+        export_mode: 'link',
+        include_screenshots: false,
+        include_video_link: true,
+        daily_template: null,
+        session_template: null
+      }
     },
     // LLM提供商列表
     llmProviders: [],
