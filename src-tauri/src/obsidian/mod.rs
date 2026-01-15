@@ -24,6 +24,7 @@ pub struct ExportOutcome {
     pub index_note_path: Option<PathBuf>,
     pub week_index_path: Option<PathBuf>,
     pub weekly_note_path: Option<PathBuf>,
+    pub overview_path: Option<PathBuf>,
     pub warnings: Vec<String>,
 }
 
@@ -45,6 +46,10 @@ impl ExportOutcome {
         }
         if let Some(path) = &self.weekly_note_path {
             message.push_str("\n周报文件: ");
+            message.push_str(&path.to_string_lossy());
+        }
+        if let Some(path) = &self.overview_path {
+            message.push_str("\n总览文件: ");
             message.push_str(&path.to_string_lossy());
         }
         if !self.warnings.is_empty() {
@@ -139,19 +144,22 @@ impl ObsidianExporter {
             }
         };
 
+        let mut week_summary: Option<WeekSummaryData> = None;
         let (week_index_path, weekly_note_path) =
             match self.build_week_summary(db.as_ref(), date).await {
                 Ok(summary) => {
-                    let index_path = match self.export_week_index_with_summary(&summary, &root).await
-                    {
-                        Ok(path) => Some(path),
-                        Err(err) => {
-                            warnings.push(format!("周索引生成失败: {}", err));
-                            None
-                        }
-                    };
+                    week_summary = Some(summary);
+                    let summary_ref = week_summary.as_ref().expect("周报摘要缺失");
+                    let index_path =
+                        match self.export_week_index_with_summary(summary_ref, &root).await {
+                            Ok(path) => Some(path),
+                            Err(err) => {
+                                warnings.push(format!("周索引生成失败: {}", err));
+                                None
+                            }
+                        };
                     let weekly_note_path =
-                        match self.export_weekly_note_with_summary(&summary, &root).await {
+                        match self.export_weekly_note_with_summary(summary_ref, &root).await {
                             Ok(path) => Some(path),
                             Err(err) => {
                                 warnings.push(format!("周报生成失败: {}", err));
@@ -166,12 +174,24 @@ impl ObsidianExporter {
                 }
             };
 
+        let overview_path = match self
+            .export_overview_index(date, week_summary.as_ref(), &root)
+            .await
+        {
+            Ok(path) => Some(path),
+            Err(err) => {
+                warnings.push(format!("总览生成失败: {}", err));
+                None
+            }
+        };
+
         Ok(ExportOutcome {
             daily_note_path,
             session_paths,
             index_note_path,
             week_index_path,
             weekly_note_path,
+            overview_path,
             warnings,
         })
     }
@@ -908,6 +928,50 @@ source: screen-analyzer\n\
             focus_metrics,
             daily_highlights,
         })
+    }
+
+    async fn export_overview_index(
+        &self,
+        date: &str,
+        week_summary: Option<&WeekSummaryData>,
+        root: &Path,
+    ) -> Result<PathBuf> {
+        let day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| anyhow!("日期格式错误: {}", date))?;
+        let month_label = format!("{:04}-{:02}", day.year(), day.month());
+        let updated_at = crate::storage::local_now().format("%Y-%m-%d %H:%M").to_string();
+
+        let daily_link = format!("[[Daily/{}]]", date);
+        let week_link = week_summary
+            .map(|summary| format!("[[Weekly/{}]]", summary.week_label))
+            .unwrap_or_else(|| "暂无".to_string());
+        let week_index_link = week_summary
+            .map(|summary| format!("[[Index/weeks-{}.md]]", summary.week_label))
+            .unwrap_or_else(|| "暂无".to_string());
+        let month_index_link = format!("[[Index/sessions-{}.md]]", month_label);
+
+        let content = format!(
+            "---\n\
+type: screen-analyzer-overview\n\
+updated_at: {updated_at}\n\
+source: screen-analyzer\n\
+---\n\
+\n\
+# Screen Analyzer 总览\n\
+\n\
+- 今日：{daily_link}\n\
+- 本周：{week_link}\n\
+- 本周索引：{week_index_link}\n\
+- 本月索引：{month_index_link}\n",
+            updated_at = updated_at,
+            daily_link = daily_link,
+            week_link = week_link,
+            week_index_link = week_index_link,
+            month_index_link = month_index_link
+        );
+
+        let index_path = root.join("Index").join("overview.md");
+        export_index_file(&index_path, content).await
     }
 
     async fn compute_week_focus_metrics(
