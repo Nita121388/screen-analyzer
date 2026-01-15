@@ -635,6 +635,15 @@ source: screen-analyzer\n\
             0
         };
 
+        let focus_metrics = self
+            .compute_week_focus_metrics(db, week_start, week_end)
+            .await;
+        let focus_minutes = focus_metrics.focus_minutes();
+        let distraction_minutes = focus_metrics.distraction_minutes();
+        let focus_ratio = focus_metrics.focus_ratio();
+        let distraction_ratio = focus_metrics.distraction_ratio();
+        let focus_summary = render_week_focus_metrics(&focus_metrics);
+
         let mut category_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for activity in &activities {
@@ -687,6 +696,11 @@ week_end: {week_end}\n\
 total_sessions: {sessions}\n\
 total_minutes: {minutes}\n\
 avg_session_minutes: {avg_session}\n\
+focus_minutes: {focus_minutes}\n\
+focus_ratio: {focus_ratio}\n\
+distraction_minutes: {distraction_minutes}\n\
+distraction_ratio: {distraction_ratio}\n\
+communication_minutes: {communication_minutes}\n\
 source: screen-analyzer\n\
 ---\n\
 \n\
@@ -698,6 +712,9 @@ source: screen-analyzer\n\
 - 平均会话时长：{avg_session} 分钟\n\
 - 主要类别：{top_categories}\n\
 \n\
+## 专注度\n\
+{focus_summary}\n\
+\n\
 ## 每日明细\n\
 {table}\n",
             week = week_label,
@@ -706,7 +723,13 @@ source: screen-analyzer\n\
             sessions = total_sessions,
             minutes = total_minutes,
             avg_session = avg_session_minutes,
+            focus_minutes = focus_minutes,
+            focus_ratio = focus_ratio,
+            distraction_minutes = distraction_minutes,
+            distraction_ratio = distraction_ratio,
+            communication_minutes = focus_metrics.communication_minutes,
             top_categories = top_categories,
+            focus_summary = focus_summary,
             table = table_lines.join("\n")
         );
 
@@ -714,6 +737,34 @@ source: screen-analyzer\n\
             .join("Index")
             .join(format!("weeks-{}.md", week_label));
         export_index_file(&index_path, content).await
+    }
+
+    async fn compute_week_focus_metrics(
+        &self,
+        db: &Database,
+        week_start: NaiveDate,
+        week_end: NaiveDate,
+    ) -> WeekFocusMetrics {
+        let mut metrics = WeekFocusMetrics::default();
+        let mut cursor = week_start;
+
+        while cursor <= week_end {
+            let date = cursor.format("%Y-%m-%d").to_string();
+            if let Ok(sessions) = db.get_sessions_by_date(&date).await {
+                for session in sessions {
+                    let session_id = match session.id {
+                        Some(id) => id,
+                        None => continue,
+                    };
+                    if let Ok(cards) = db.get_timeline_cards_by_session(session_id).await {
+                        metrics.add_cards(&cards);
+                    }
+                }
+            }
+            cursor += chrono::Duration::days(1);
+        }
+
+        metrics
     }
 }
 
@@ -754,6 +805,66 @@ struct SessionMetrics {
     fragmentation_level: String,
 }
 
+#[derive(Default)]
+struct WeekFocusMetrics {
+    total_minutes: i64,
+    work_minutes: i64,
+    learning_minutes: i64,
+    communication_minutes: i64,
+    personal_minutes: i64,
+    idle_minutes: i64,
+    other_minutes: i64,
+}
+
+impl WeekFocusMetrics {
+    fn add_cards(&mut self, cards: &[TimelineCardRecord]) {
+        for card in cards {
+            self.add_card(card);
+        }
+    }
+
+    fn add_card(&mut self, card: &TimelineCardRecord) {
+        let minutes = parse_card_minutes(card);
+        if minutes <= 0 {
+            return;
+        }
+        self.total_minutes += minutes;
+
+        match normalize_timeline_category(&card.category) {
+            ActivityCategory::Work => self.work_minutes += minutes,
+            ActivityCategory::Learning => self.learning_minutes += minutes,
+            ActivityCategory::Communication => self.communication_minutes += minutes,
+            ActivityCategory::Personal => self.personal_minutes += minutes,
+            ActivityCategory::Idle => self.idle_minutes += minutes,
+            ActivityCategory::Other => self.other_minutes += minutes,
+        }
+    }
+
+    fn focus_minutes(&self) -> i64 {
+        self.work_minutes + self.learning_minutes
+    }
+
+    fn distraction_minutes(&self) -> i64 {
+        self.personal_minutes + self.idle_minutes + self.other_minutes
+    }
+
+    fn focus_ratio(&self) -> i64 {
+        if self.total_minutes == 0 {
+            0
+        } else {
+            (self.focus_minutes() * 100 / self.total_minutes).max(0)
+        }
+    }
+
+    fn distraction_ratio(&self) -> i64 {
+        if self.total_minutes == 0 {
+            0
+        } else {
+            (self.distraction_minutes() * 100 / self.total_minutes).max(0)
+        }
+    }
+}
+
 fn build_session_metrics(cards: &[TimelineCardRecord], duration_minutes: i64) -> SessionMetrics {
     let timeline_cards = cards.len();
     let context_switches = count_context_switches(cards);
@@ -791,6 +902,26 @@ fn render_metrics(metrics: &SessionMetrics) -> String {
     )
 }
 
+fn render_week_focus_metrics(metrics: &WeekFocusMetrics) -> String {
+    if metrics.total_minutes == 0 {
+        return "暂无可用专注度数据".to_string();
+    }
+
+    format!(
+        "- 专注时长: {} 分钟 ({}%)\n- 沟通时长: {} 分钟\n- 分心时长: {} 分钟 ({}%)\n- 细分: 工作 {} / 学习 {} / 个人 {} / 空闲 {} / 其他 {}",
+        metrics.focus_minutes(),
+        metrics.focus_ratio(),
+        metrics.communication_minutes,
+        metrics.distraction_minutes(),
+        metrics.distraction_ratio(),
+        metrics.work_minutes,
+        metrics.learning_minutes,
+        metrics.personal_minutes,
+        metrics.idle_minutes,
+        metrics.other_minutes
+    )
+}
+
 fn count_context_switches(cards: &[TimelineCardRecord]) -> usize {
     let mut switches = 0usize;
     let mut last_category: Option<String> = None;
@@ -806,6 +937,26 @@ fn count_context_switches(cards: &[TimelineCardRecord]) -> usize {
     }
 
     switches
+}
+
+fn normalize_timeline_category(raw: &str) -> ActivityCategory {
+    match raw.to_lowercase().as_str() {
+        "work" => ActivityCategory::Work,
+        "communication" | "meeting" => ActivityCategory::Communication,
+        "learning" | "research" => ActivityCategory::Learning,
+        "personal" => ActivityCategory::Personal,
+        "idle" | "break" => ActivityCategory::Idle,
+        _ => ActivityCategory::Other,
+    }
+}
+
+fn parse_card_minutes(card: &TimelineCardRecord) -> i64 {
+    let start = chrono::DateTime::parse_from_rfc3339(&card.start_time).ok();
+    let end = chrono::DateTime::parse_from_rfc3339(&card.end_time).ok();
+    match (start, end) {
+        (Some(s), Some(e)) => (e - s).num_minutes().max(0),
+        _ => 0,
+    }
 }
 
 fn format_time_range(start: &str, end: &str) -> (String, String) {
