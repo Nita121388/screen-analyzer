@@ -1,7 +1,7 @@
 // Obsidian 导出模块 - 生成 Markdown 文件
 
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -21,6 +21,7 @@ pub struct ObsidianExporter {
 pub struct ExportOutcome {
     pub daily_note_path: PathBuf,
     pub session_paths: Vec<PathBuf>,
+    pub index_note_path: Option<PathBuf>,
     pub warnings: Vec<String>,
 }
 
@@ -32,6 +33,10 @@ impl ExportOutcome {
             self.daily_note_path.to_string_lossy(),
             self.session_paths.len()
         );
+        if let Some(path) = &self.index_note_path {
+            message.push_str("\n索引文件: ");
+            message.push_str(&path.to_string_lossy());
+        }
         if !self.warnings.is_empty() {
             message.push_str("\n\n警告:\n");
             for warning in &self.warnings {
@@ -116,9 +121,18 @@ impl ObsidianExporter {
         let daily_content = self.render_daily_note(&day_summary, &session_links);
         fs::write(&daily_note_path, daily_content).await?;
 
+        let index_note_path = match self.export_month_index(db.as_ref(), date, &root).await {
+            Ok(path) => Some(path),
+            Err(err) => {
+                warnings.push(format!("索引生成失败: {}", err));
+                None
+            }
+        };
+
         Ok(ExportOutcome {
             daily_note_path,
             session_paths,
+            index_note_path,
             warnings,
         })
     }
@@ -437,6 +451,121 @@ source: screen-analyzer\n\
             }
         }
     }
+
+    async fn export_month_index(
+        &self,
+        db: &Database,
+        date: &str,
+        root: &Path,
+    ) -> Result<PathBuf> {
+        let day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| anyhow!("日期格式错误: {}", date))?;
+        let (year, month) = (day.year(), day.month());
+
+        let month_start =
+            NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(|| anyhow!("月份无效"))?;
+        let next_month = if month == 12 {
+            NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+        }
+        .ok_or_else(|| anyhow!("月份无效"))?;
+        let month_end = next_month - chrono::Duration::days(1);
+
+        let start_date = month_start.format("%Y-%m-%d").to_string();
+        let end_date = month_end.format("%Y-%m-%d").to_string();
+
+        let mut activities = db
+            .get_activities(&start_date, &end_date)
+            .await
+            .map_err(|e| anyhow!(e))?;
+
+        activities.sort_by(|a, b| a.date.cmp(&b.date));
+
+        let total_sessions: i32 = activities.iter().map(|a| a.session_count).sum();
+        let total_minutes: i32 = activities.iter().map(|a| a.total_duration_minutes).sum();
+
+        let mut category_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for activity in &activities {
+            for category in &activity.main_categories {
+                *category_counts.entry(category.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let mut categories: Vec<(String, usize)> = category_counts.into_iter().collect();
+        categories.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_categories = if categories.is_empty() {
+            "暂无".to_string()
+        } else {
+            categories
+                .iter()
+                .take(5)
+                .map(|(name, count)| format!("{}({})", name, count))
+                .collect::<Vec<_>>()
+                .join("、")
+        };
+
+        let mut table_lines = Vec::new();
+        table_lines.push("| 日期 | 会话数 | 总时长(分钟) | 主要类别 |".to_string());
+        table_lines.push("| --- | --- | --- | --- |".to_string());
+
+        if activities.is_empty() {
+            table_lines.push("| - | 0 | 0 | - |".to_string());
+        } else {
+            for activity in &activities {
+                let date_link = format!("[[Daily/{}]]", activity.date);
+                let categories = if activity.main_categories.is_empty() {
+                    "-".to_string()
+                } else {
+                    activity.main_categories.join(", ")
+                };
+                table_lines.push(format!(
+                    "| {} | {} | {} | {} |",
+                    date_link, activity.session_count, activity.total_duration_minutes, categories
+                ));
+            }
+        }
+
+        let content = format!(
+            "---\n\
+type: screen-analyzer-index\n\
+month: {month}\n\
+total_sessions: {sessions}\n\
+total_minutes: {minutes}\n\
+source: screen-analyzer\n\
+---\n\
+\n\
+# {month} 月度索引\n\
+\n\
+## 概览\n\
+- 会话总数：{sessions}\n\
+- 总时长：{minutes} 分钟\n\
+- 主要类别：{top_categories}\n\
+\n\
+## 每日明细\n\
+{table}\n",
+            month = format!("{:04}-{:02}", year, month),
+            sessions = total_sessions,
+            minutes = total_minutes,
+            top_categories = top_categories,
+            table = table_lines.join("\n")
+        );
+
+        let index_path = root.join("Index").join(format!(
+            "sessions-{:04}-{:02}.md",
+            year, month
+        ));
+        export_index_file(&index_path, content).await
+    }
+}
+
+async fn export_index_file(path: &Path, content: String) -> Result<PathBuf> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    fs::write(path, content).await?;
+    Ok(path.to_path_buf())
 }
 
 fn format_time(dt: DateTime<Utc>) -> String {
