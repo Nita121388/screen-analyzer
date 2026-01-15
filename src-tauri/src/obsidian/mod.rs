@@ -1,7 +1,7 @@
 // Obsidian 导出模块 - 生成 Markdown 文件
 
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -22,6 +22,7 @@ pub struct ExportOutcome {
     pub daily_note_path: PathBuf,
     pub session_paths: Vec<PathBuf>,
     pub index_note_path: Option<PathBuf>,
+    pub week_index_path: Option<PathBuf>,
     pub warnings: Vec<String>,
 }
 
@@ -35,6 +36,10 @@ impl ExportOutcome {
         );
         if let Some(path) = &self.index_note_path {
             message.push_str("\n索引文件: ");
+            message.push_str(&path.to_string_lossy());
+        }
+        if let Some(path) = &self.week_index_path {
+            message.push_str("\n周索引文件: ");
             message.push_str(&path.to_string_lossy());
         }
         if !self.warnings.is_empty() {
@@ -129,10 +134,19 @@ impl ObsidianExporter {
             }
         };
 
+        let week_index_path = match self.export_week_index(db.as_ref(), date, &root).await {
+            Ok(path) => Some(path),
+            Err(err) => {
+                warnings.push(format!("周索引生成失败: {}", err));
+                None
+            }
+        };
+
         Ok(ExportOutcome {
             daily_note_path,
             session_paths,
             index_note_path,
+            week_index_path,
             warnings,
         })
     }
@@ -583,6 +597,122 @@ source: screen-analyzer\n\
             "sessions-{:04}-{:02}.md",
             year, month
         ));
+        export_index_file(&index_path, content).await
+    }
+
+    async fn export_week_index(
+        &self,
+        db: &Database,
+        date: &str,
+        root: &Path,
+    ) -> Result<PathBuf> {
+        let day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| anyhow!("日期格式错误: {}", date))?;
+        let iso_week = day.iso_week();
+        let week_year = iso_week.year();
+        let week_number = iso_week.week();
+
+        let week_start = NaiveDate::from_isoywd_opt(week_year, week_number, Weekday::Mon)
+            .ok_or_else(|| anyhow!("周起始日期无效"))?;
+        let week_end = NaiveDate::from_isoywd_opt(week_year, week_number, Weekday::Sun)
+            .ok_or_else(|| anyhow!("周结束日期无效"))?;
+
+        let start_date = week_start.format("%Y-%m-%d").to_string();
+        let end_date = week_end.format("%Y-%m-%d").to_string();
+
+        let mut activities = db
+            .get_activities(&start_date, &end_date)
+            .await
+            .map_err(|e| anyhow!(e))?;
+
+        activities.sort_by(|a, b| a.date.cmp(&b.date));
+
+        let total_sessions: i32 = activities.iter().map(|a| a.session_count).sum();
+        let total_minutes: i32 = activities.iter().map(|a| a.total_duration_minutes).sum();
+        let avg_session_minutes = if total_sessions > 0 {
+            total_minutes / total_sessions
+        } else {
+            0
+        };
+
+        let mut category_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for activity in &activities {
+            for category in &activity.main_categories {
+                *category_counts.entry(category.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let mut categories: Vec<(String, usize)> = category_counts.into_iter().collect();
+        categories.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_categories = if categories.is_empty() {
+            "暂无".to_string()
+        } else {
+            categories
+                .iter()
+                .take(5)
+                .map(|(name, count)| format!("{}({})", name, count))
+                .collect::<Vec<_>>()
+                .join("、")
+        };
+
+        let mut table_lines = Vec::new();
+        table_lines.push("| 日期 | 会话数 | 总时长(分钟) | 主要类别 |".to_string());
+        table_lines.push("| --- | --- | --- | --- |".to_string());
+
+        if activities.is_empty() {
+            table_lines.push("| - | 0 | 0 | - |".to_string());
+        } else {
+            for activity in &activities {
+                let date_link = format!("[[Daily/{}]]", activity.date);
+                let categories = if activity.main_categories.is_empty() {
+                    "-".to_string()
+                } else {
+                    activity.main_categories.join(", ")
+                };
+                table_lines.push(format!(
+                    "| {} | {} | {} | {} |",
+                    date_link, activity.session_count, activity.total_duration_minutes, categories
+                ));
+            }
+        }
+
+        let week_label = format!("{:04}-W{:02}", week_year, week_number);
+        let content = format!(
+            "---\n\
+type: screen-analyzer-week-index\n\
+week: {week}\n\
+week_start: {week_start}\n\
+week_end: {week_end}\n\
+total_sessions: {sessions}\n\
+total_minutes: {minutes}\n\
+avg_session_minutes: {avg_session}\n\
+source: screen-analyzer\n\
+---\n\
+\n\
+# {week} 周度索引\n\
+\n\
+## 概览\n\
+- 会话总数：{sessions}\n\
+- 总时长：{minutes} 分钟\n\
+- 平均会话时长：{avg_session} 分钟\n\
+- 主要类别：{top_categories}\n\
+\n\
+## 每日明细\n\
+{table}\n",
+            week = week_label,
+            week_start = start_date,
+            week_end = end_date,
+            sessions = total_sessions,
+            minutes = total_minutes,
+            avg_session = avg_session_minutes,
+            top_categories = top_categories,
+            table = table_lines.join("\n")
+        );
+
+        let index_path = root
+            .join("Index")
+            .join(format!("weeks-{}.md", week_label));
         export_index_file(&index_path, content).await
     }
 }

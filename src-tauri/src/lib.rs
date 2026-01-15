@@ -3,6 +3,7 @@
 // 声明模块
 pub mod actors;
 pub mod capture;
+pub mod config_migration;
 pub mod domains;
 pub mod event_bus;
 pub mod llm;
@@ -27,6 +28,9 @@ use domains::{AnalysisDomain, CaptureDomain, StorageDomain, SystemDomain};
 use event_bus::EventBus;
 use llm::{plugin::LLMProvider, CodexProvider, LLMManager};
 use models::*;
+use config_migration::{
+    normalize_imported_config, persisted_to_app_config, strip_secrets, ConfigExportPackage,
+};
 use obsidian::ObsidianExporter;
 use settings::SettingsManager;
 use storage::{Database, StorageCleaner};
@@ -174,6 +178,227 @@ async fn export_obsidian_day(
         .map_err(|e| e.to_string())?;
 
     Ok(result.render_message())
+}
+
+fn resolve_config_path(app: &tauri::AppHandle, raw_path: &str) -> Result<PathBuf, String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("配置路径不能为空".to_string());
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取应用目录失败: {}", e))?;
+    Ok(app_dir.join(path))
+}
+
+fn resolve_export_path(
+    app: &tauri::AppHandle,
+    output_path: Option<String>,
+) -> Result<PathBuf, String> {
+    let timestamp = storage::local_now()
+        .format("%Y%m%d-%H%M%S")
+        .to_string();
+    let default_name = format!("screen-analyzer-config-{}.json", timestamp);
+
+    let base_path = if let Some(path) = output_path {
+        if path.trim().is_empty() {
+            None
+        } else {
+            Some(resolve_config_path(app, &path)?)
+        }
+    } else {
+        None
+    };
+
+    let target_path = if let Some(path) = base_path {
+        if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "json" {
+            path
+        } else {
+            path.join(default_name)
+        }
+    } else {
+        let app_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("获取应用目录失败: {}", e))?;
+        app_dir.join("exports").join(default_name)
+    };
+
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建导出目录失败: {}", e))?;
+    }
+
+    Ok(target_path)
+}
+
+async fn apply_llm_config_from_persisted(
+    state: &AppState,
+    config: &PersistedAppConfig,
+) -> Result<(), String> {
+    let llm_config = config
+        .llm_config
+        .as_ref()
+        .ok_or_else(|| "导入配置未包含 LLM 详细信息".to_string())?;
+
+    match config.llm_provider.as_str() {
+        "openai" => {
+            if llm_config.api_key.trim().is_empty() {
+                return Err("通义千问 API Key 为空，未应用 LLM 配置".to_string());
+            }
+
+            let qwen_config = llm::QwenConfig {
+                api_key: llm_config.api_key.clone(),
+                model: llm_config.model.clone(),
+                base_url: llm_config.base_url.clone(),
+                use_video_mode: llm_config.use_video_mode,
+                video_path: None,
+            };
+
+            state
+                .analysis_domain
+                .get_llm_handle()
+                .configure(qwen_config)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        "claude" => {
+            if !llm_config.auth_token.trim().is_empty() {
+                std::env::set_var("ANTHROPIC_AUTH_TOKEN", &llm_config.auth_token);
+                std::env::set_var("ANTHROPIC_API_KEY", &llm_config.auth_token);
+            } else {
+                std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+                std::env::remove_var("ANTHROPIC_API_KEY");
+            }
+
+            if !llm_config.base_url.trim().is_empty() {
+                std::env::set_var("ANTHROPIC_BASE_URL", &llm_config.base_url);
+            } else {
+                std::env::remove_var("ANTHROPIC_BASE_URL");
+            }
+        }
+        "codex" => {
+            let raw = llm_config
+                .codex_config
+                .clone()
+                .ok_or_else(|| "未找到 Codex 配置".to_string())?;
+            let codex_config: llm::CodexConfig = serde_json::from_value(raw)
+                .map_err(|e| format!("Codex 配置解析失败: {}", e))?;
+
+            state
+                .analysis_domain
+                .get_llm_handle()
+                .configure_codex(codex_config)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        _ => {
+            return Err(format!(
+                "不支持的 LLM 提供商: {}",
+                config.llm_provider
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// 导出应用配置（用于换机/备份）
+#[tauri::command]
+async fn export_config(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    output_path: Option<String>,
+    include_secrets: bool,
+) -> Result<String, String> {
+    let mut config = state.storage_domain.get_settings().get().await;
+    if !include_secrets {
+        strip_secrets(&mut config);
+    }
+
+    let package = ConfigExportPackage {
+        version: 1,
+        exported_at: storage::local_now().to_rfc3339(),
+        include_secrets,
+        app_config: config,
+    };
+
+    let json = serde_json::to_string_pretty(&package).map_err(|e| e.to_string())?;
+    let target_path = resolve_export_path(&app, output_path)?;
+
+    tokio::fs::write(&target_path, json)
+        .await
+        .map_err(|e| format!("写入导出文件失败: {}", e))?;
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
+/// 导入配置并应用
+#[tauri::command]
+async fn import_config(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    path: String,
+    allow_secrets: bool,
+) -> Result<String, String> {
+    let input_path = resolve_config_path(&app, &path)?;
+    if !input_path.exists() {
+        return Err("配置文件不存在".to_string());
+    }
+    if input_path.is_dir() {
+        return Err("配置路径是目录，请提供文件路径".to_string());
+    }
+
+    let raw = tokio::fs::read(&input_path)
+        .await
+        .map_err(|e| format!("读取配置失败: {}", e))?;
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&raw).map_err(|e| format!("解析配置失败: {}", e))?;
+
+    let (mut config, file_has_secrets) = if value.get("app_config").is_some() {
+        let package: ConfigExportPackage =
+            serde_json::from_value(value).map_err(|e| format!("解析导出包失败: {}", e))?;
+        (package.app_config, package.include_secrets)
+    } else {
+        let config: PersistedAppConfig =
+            serde_json::from_value(value).map_err(|e| format!("解析配置失败: {}", e))?;
+        (config, false)
+    };
+
+    if !allow_secrets || !file_has_secrets {
+        strip_secrets(&mut config);
+    }
+
+    let config = normalize_imported_config(config);
+    state
+        .storage_domain
+        .get_settings()
+        .replace(config.clone())
+        .await
+        .map_err(|e| format!("保存配置失败: {}", e))?;
+
+    let _ = update_config(state, persisted_to_app_config(config.clone())).await?;
+
+    let mut warnings = Vec::new();
+    if let Err(err) = apply_llm_config_from_persisted(&state, &config).await {
+        warnings.push(err);
+    }
+
+    let mut message = "配置导入完成".to_string();
+    if !warnings.is_empty() {
+        message.push_str("，但需要处理以下事项：\n");
+        message.push_str(&warnings.join("\n"));
+    }
+
+    Ok(message)
 }
 
 /// 获取会话详情
@@ -2895,6 +3120,8 @@ pub fn run() {
             get_day_sessions,
             get_day_summary,
             export_obsidian_day,
+            export_config,
+            import_config,
             get_session_detail,
             get_app_config,
             update_config,

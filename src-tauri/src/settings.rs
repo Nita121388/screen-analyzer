@@ -82,6 +82,13 @@ impl SettingsManager {
         Ok(config.clone())
     }
 
+    pub async fn replace(&self, next: PersistedAppConfig) -> Result<PersistedAppConfig> {
+        let mut config = self.data.write().await;
+        *config = next;
+        self.save(&config).await?;
+        Ok(config.clone())
+    }
+
     async fn save(&self, config: &PersistedAppConfig) -> Result<()> {
         let json = serde_json::to_string_pretty(config)?;
         tokio::fs::write(&self.path, json).await?;

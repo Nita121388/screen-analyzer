@@ -812,6 +812,64 @@
         </el-form>
       </el-tab-pane>
 
+      <!-- 配置迁移 -->
+      <el-tab-pane label="配置迁移" name="config-migration">
+        <div class="migration-section">
+          <h4>导出配置包</h4>
+          <el-form :model="migrationConfig" label-width="140px">
+            <el-form-item label="导出路径">
+              <el-input
+                v-model="migrationConfig.export_path"
+                placeholder="留空则保存到应用数据目录 exports/"
+              />
+              <span class="form-tip">支持填写文件或目录路径</span>
+            </el-form-item>
+
+            <el-form-item label="包含密钥">
+              <el-switch v-model="migrationConfig.include_secrets" />
+              <span class="form-tip">谨慎开启，仅建议在可信环境使用</span>
+            </el-form-item>
+
+            <el-form-item label="导出操作">
+              <el-button
+                type="primary"
+                :loading="exportingConfig"
+                @click="exportConfig"
+              >
+                导出配置
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <div class="migration-section">
+          <h4>导入配置包</h4>
+          <el-form :model="migrationConfig" label-width="140px">
+            <el-form-item label="配置文件">
+              <el-input
+                v-model="migrationConfig.import_path"
+                placeholder="例如 D:\\backup\\screen-analyzer-config.json"
+              />
+            </el-form-item>
+
+            <el-form-item label="允许密钥">
+              <el-switch v-model="migrationConfig.allow_secrets" />
+              <span class="form-tip">未勾选时将自动清空密钥与令牌</span>
+            </el-form-item>
+
+            <el-form-item label="导入操作">
+              <el-button
+                type="primary"
+                :loading="importingConfig"
+                @click="importConfig"
+              >
+                导入并覆盖
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+      </el-tab-pane>
+
       <!-- 关于 -->
       <el-tab-pane label="关于" name="about">
         <div class="about-content">
@@ -984,6 +1042,14 @@ const obsidianConfig = reactive({
   session_template: ''
 })
 
+// 配置迁移
+const migrationConfig = reactive({
+  export_path: '',
+  import_path: '',
+  include_secrets: false,
+  allow_secrets: false
+})
+
 const testingNotion = ref(false)
 const loadingAnthropicEnv = ref(false)
 const notionPages = ref([])
@@ -998,6 +1064,8 @@ const creatingNotionDatabase = ref(false)
 const createDatabaseDialogVisible = ref(false)
 const newDatabaseName = ref('Screen Analyzer 会话记录')
 const exportingObsidian = ref(false)
+const exportingConfig = ref(false)
+const importingConfig = ref(false)
 
 // 格式化质量提示
 const formatQuality = (value) => {
@@ -1354,6 +1422,76 @@ const exportObsidianDay = async () => {
   }
 }
 
+// 导出配置
+const exportConfig = async () => {
+  if (migrationConfig.include_secrets) {
+    try {
+      await ElMessageBox.confirm(
+        '即将导出包含密钥的配置文件，请确保导出位置安全可信。',
+        '包含密钥导出确认',
+        {
+          confirmButtonText: '继续导出',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+      )
+    } catch (error) {
+      return
+    }
+  }
+
+  exportingConfig.value = true
+  try {
+    const path = await invoke('export_config', {
+      output_path: migrationConfig.export_path,
+      include_secrets: migrationConfig.include_secrets
+    })
+    migrationConfig.export_path = path
+    ElMessage.success(`配置已导出: ${path}`)
+  } catch (error) {
+    ElMessage.error('导出配置失败: ' + error)
+  } finally {
+    exportingConfig.value = false
+  }
+}
+
+// 导入配置
+const importConfig = async () => {
+  if (!migrationConfig.import_path || !migrationConfig.import_path.trim()) {
+    ElMessage.warning('请先填写配置文件路径')
+    return
+  }
+
+  const confirmText = migrationConfig.allow_secrets
+    ? '将导入并覆盖当前配置（包含密钥），是否继续？'
+    : '将导入并覆盖当前配置（密钥将被清空），是否继续？'
+
+  try {
+    await ElMessageBox.confirm(confirmText, '导入配置确认', {
+      confirmButtonText: '确认导入',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+  } catch (error) {
+    return
+  }
+
+  importingConfig.value = true
+  try {
+    const result = await invoke('import_config', {
+      path: migrationConfig.import_path.trim(),
+      allow_secrets: migrationConfig.allow_secrets
+    })
+    ElMessage.success(result)
+    await store.fetchAppConfig()
+    initSettings()
+  } catch (error) {
+    ElMessage.error('导入配置失败: ' + error)
+  } finally {
+    importingConfig.value = false
+  }
+}
+
 // 清空日志
 const clearLogs = () => {
   logs.value = []
@@ -1674,6 +1812,15 @@ onUnmounted(() => {
 
 .about-content li {
   margin-bottom: 5px;
+}
+
+.migration-section {
+  padding: 10px 0 20px;
+}
+
+.migration-section h4 {
+  color: #303133;
+  margin: 10px 0 12px;
 }
 
 :deep(.el-tabs__content) {
