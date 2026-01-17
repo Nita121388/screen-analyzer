@@ -146,7 +146,7 @@ impl ObsidianExporter {
 
         let mut week_summary: Option<WeekSummaryData> = None;
         let (week_index_path, weekly_note_path) =
-            match self.build_week_summary(db.as_ref(), date).await {
+            match self.build_week_summary(db.as_ref(), date, &self.config).await {
                 Ok(summary) => {
                     week_summary = Some(summary);
                     let summary_ref = week_summary.as_ref().expect("周报摘要缺失");
@@ -650,14 +650,22 @@ source: screen-analyzer\n\
         summary: &WeekSummaryData,
         root: &Path,
     ) -> Result<PathBuf> {
-        let focus_summary = render_week_focus_metrics(&summary.focus_metrics);
+        let focus_summary =
+            render_week_focus_metrics(&summary.focus_metrics, &summary.score_config);
         let focus_minutes = summary.focus_metrics.focus_minutes();
         let distraction_minutes = summary.focus_metrics.distraction_minutes();
         let focus_ratio = summary.focus_metrics.focus_ratio();
         let distraction_ratio = summary.focus_metrics.distraction_ratio();
         let focus_score = summary.focus_metrics.focus_score();
-        let effort_score = summary.focus_metrics.effort_score();
-        let productivity_score = summary.focus_metrics.productivity_score();
+        let effort_score =
+            summary
+                .focus_metrics
+                .effort_score(summary.score_config.target_minutes);
+        let productivity_score = summary.focus_metrics.productivity_score(
+            summary.score_config.focus_weight,
+            summary.score_config.effort_weight,
+            summary.score_config.target_minutes,
+        );
 
         let content = format!(
             "---\n\
@@ -676,6 +684,9 @@ communication_minutes: {communication_minutes}\n\
 focus_score: {focus_score}\n\
 effort_score: {effort_score}\n\
 productivity_score: {productivity_score}\n\
+focus_weight: {focus_weight}\n\
+effort_weight: {effort_weight}\n\
+target_minutes: {target_minutes}\n\
 source: screen-analyzer\n\
 ---\n\
 \n\
@@ -706,6 +717,9 @@ source: screen-analyzer\n\
             focus_score = focus_score,
             effort_score = effort_score,
             productivity_score = productivity_score,
+            focus_weight = summary.score_config.focus_weight,
+            effort_weight = summary.score_config.effort_weight,
+            target_minutes = summary.score_config.target_minutes,
             top_categories = summary.top_categories,
             focus_summary = focus_summary,
             table = summary.table_lines.join("\n")
@@ -732,14 +746,22 @@ source: screen-analyzer\n\
     }
 
     fn render_weekly_note(&self, summary: &WeekSummaryData) -> String {
-        let focus_summary = render_week_focus_metrics(&summary.focus_metrics);
+        let focus_summary =
+            render_week_focus_metrics(&summary.focus_metrics, &summary.score_config);
         let focus_minutes = summary.focus_metrics.focus_minutes();
         let distraction_minutes = summary.focus_metrics.distraction_minutes();
         let focus_ratio = summary.focus_metrics.focus_ratio();
         let distraction_ratio = summary.focus_metrics.distraction_ratio();
         let focus_score = summary.focus_metrics.focus_score();
-        let effort_score = summary.focus_metrics.effort_score();
-        let productivity_score = summary.focus_metrics.productivity_score();
+        let effort_score =
+            summary
+                .focus_metrics
+                .effort_score(summary.score_config.target_minutes);
+        let productivity_score = summary.focus_metrics.productivity_score(
+            summary.score_config.focus_weight,
+            summary.score_config.effort_weight,
+            summary.score_config.target_minutes,
+        );
         let highlights = if summary.daily_highlights.is_empty() {
             "- 暂无每日总结".to_string()
         } else {
@@ -774,6 +796,9 @@ communication_minutes: {communication_minutes}\n\
 focus_score: {focus_score}\n\
 effort_score: {effort_score}\n\
 productivity_score: {productivity_score}\n\
+focus_weight: {focus_weight}\n\
+effort_weight: {effort_weight}\n\
+target_minutes: {target_minutes}\n\
 source: screen-analyzer\n\
 ---\n\
 \n\
@@ -793,8 +818,8 @@ source: screen-analyzer\n\
 \n\
 ## 评分说明\n\
 - 专注评分 = 专注占比\n\
-- 投入时长评分：以 480 分钟为 100 分，上限封顶\n\
-- 生产力评分 = 专注评分 60% + 投入时长评分 40%\n\
+- 投入时长评分：以 {target_minutes} 分钟为 100 分，上限封顶\n\
+- 生产力评分 = 专注评分 {focus_weight}% + 投入时长评分 {effort_weight}%\n\
 \n\
 ## 每日要点\n\
 {highlights}\n\
@@ -815,6 +840,9 @@ source: screen-analyzer\n\
             focus_score = focus_score,
             effort_score = effort_score,
             productivity_score = productivity_score,
+            focus_weight = summary.score_config.focus_weight,
+            effort_weight = summary.score_config.effort_weight,
+            target_minutes = summary.score_config.target_minutes,
             top_categories = summary.top_categories,
             focus_summary = focus_summary,
             insight_text = insight_text,
@@ -827,6 +855,7 @@ source: screen-analyzer\n\
         &self,
         db: &Database,
         date: &str,
+        config: &ObsidianExportConfig,
     ) -> Result<WeekSummaryData> {
         let day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .map_err(|_| anyhow!("日期格式错误: {}", date))?;
@@ -860,6 +889,15 @@ source: screen-analyzer\n\
         let focus_metrics = self
             .compute_week_focus_metrics(db, week_start, week_end)
             .await;
+
+        let focus_weight = i64::from(config.weekly_focus_weight.min(100));
+        let effort_weight = 100 - focus_weight;
+        let target_minutes = config.weekly_target_minutes.max(1);
+        let score_config = WeekScoreConfig {
+            focus_weight,
+            effort_weight,
+            target_minutes,
+        };
 
         let mut category_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -926,6 +964,7 @@ source: screen-analyzer\n\
             top_categories,
             table_lines,
             focus_metrics,
+            score_config,
             daily_highlights,
         })
     }
@@ -1061,7 +1100,14 @@ struct WeekSummaryData {
     top_categories: String,
     table_lines: Vec<String>,
     focus_metrics: WeekFocusMetrics,
+    score_config: WeekScoreConfig,
     daily_highlights: Vec<String>,
+}
+
+struct WeekScoreConfig {
+    focus_weight: i64,
+    effort_weight: i64,
+    target_minutes: i64,
 }
 
 impl WeekFocusMetrics {
@@ -1112,11 +1158,11 @@ impl WeekFocusMetrics {
         }
     }
 
-    fn effort_score(&self) -> i64 {
-        if self.total_minutes == 0 {
+    fn effort_score(&self, target_minutes: i64) -> i64 {
+        if self.total_minutes == 0 || target_minutes <= 0 {
             return 0;
         }
-        let score = self.total_minutes * 100 / 480;
+        let score = self.total_minutes * 100 / target_minutes;
         score.min(100).max(0)
     }
 
@@ -1124,8 +1170,16 @@ impl WeekFocusMetrics {
         self.focus_ratio()
     }
 
-    fn productivity_score(&self) -> i64 {
-        (self.focus_score() * 60 + self.effort_score() * 40) / 100
+    fn productivity_score(
+        &self,
+        focus_weight: i64,
+        effort_weight: i64,
+        target_minutes: i64,
+    ) -> i64 {
+        let total_weight = (focus_weight + effort_weight).max(1);
+        let focus_score = self.focus_score();
+        let effort_score = self.effort_score(target_minutes);
+        (focus_score * focus_weight + effort_score * effort_weight) / total_weight
     }
 }
 
@@ -1166,21 +1220,29 @@ fn render_metrics(metrics: &SessionMetrics) -> String {
     )
 }
 
-fn render_week_focus_metrics(metrics: &WeekFocusMetrics) -> String {
+fn render_week_focus_metrics(metrics: &WeekFocusMetrics, score: &WeekScoreConfig) -> String {
     if metrics.total_minutes == 0 {
         return "暂无可用专注度数据".to_string();
     }
 
+    let focus_score = metrics.focus_score();
+    let effort_score = metrics.effort_score(score.target_minutes);
+    let productivity_score =
+        metrics.productivity_score(score.focus_weight, score.effort_weight, score.target_minutes);
+
     format!(
-        "- 专注时长: {} 分钟 ({}%)\n- 沟通时长: {} 分钟\n- 分心时长: {} 分钟 ({}%)\n- 专注评分: {} / 100\n- 投入时长评分: {} / 100\n- 生产力评分: {} / 100\n- 细分: 工作 {} / 学习 {} / 个人 {} / 空闲 {} / 其他 {}",
+        "- 专注时长: {} 分钟 ({}%)\n- 沟通时长: {} 分钟\n- 分心时长: {} 分钟 ({}%)\n- 专注评分: {} / 100\n- 投入时长评分: {} / 100（目标 {} 分钟）\n- 生产力评分: {} / 100（权重 {}% / {}%）\n- 细分: 工作 {} / 学习 {} / 个人 {} / 空闲 {} / 其他 {}",
         metrics.focus_minutes(),
         metrics.focus_ratio(),
         metrics.communication_minutes,
         metrics.distraction_minutes(),
         metrics.distraction_ratio(),
-        metrics.focus_score(),
-        metrics.effort_score(),
-        metrics.productivity_score(),
+        focus_score,
+        effort_score,
+        score.target_minutes,
+        productivity_score,
+        score.focus_weight,
+        score.effort_weight,
         metrics.work_minutes,
         metrics.learning_minutes,
         metrics.personal_minutes,
@@ -1192,7 +1254,11 @@ fn render_week_focus_metrics(metrics: &WeekFocusMetrics) -> String {
 fn build_week_insights(summary: &WeekSummaryData) -> Vec<String> {
     let mut insights = Vec::new();
     let focus_ratio = summary.focus_metrics.focus_ratio();
-    let productivity_score = summary.focus_metrics.productivity_score();
+    let productivity_score = summary.focus_metrics.productivity_score(
+        summary.score_config.focus_weight,
+        summary.score_config.effort_weight,
+        summary.score_config.target_minutes,
+    );
     let total_minutes = summary.total_minutes;
     let avg_session_minutes = summary.avg_session_minutes;
 

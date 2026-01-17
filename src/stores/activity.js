@@ -52,6 +52,8 @@ export const useActivityStore = defineStore('activity', {
         export_mode: 'link',
         include_screenshots: false,
         include_video_link: true,
+        weekly_focus_weight: 60,
+        weekly_target_minutes: 2400,
         daily_template: null,
         session_template: null
       }

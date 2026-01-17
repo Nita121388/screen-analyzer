@@ -798,6 +798,26 @@
             <span class="form-tip">仅写入视频路径链接</span>
           </el-form-item>
 
+          <el-form-item label="专注权重(%)">
+            <el-input-number
+              v-model="obsidianConfig.weekly_focus_weight"
+              :min="0"
+              :max="100"
+              :disabled="!obsidianConfig.enabled"
+            />
+            <span class="form-tip">投入权重为 {{ weeklyEffortWeight }}%</span>
+          </el-form-item>
+
+          <el-form-item label="周目标时长">
+            <el-input-number
+              v-model="obsidianConfig.weekly_target_minutes"
+              :min="60"
+              :max="10080"
+              :disabled="!obsidianConfig.enabled"
+            />
+            <span class="form-tip">分钟（默认 2400 = 5 天 * 8 小时）</span>
+          </el-form-item>
+
           <el-form-item label="立即导出">
             <el-button
               type="primary"
@@ -1072,6 +1092,8 @@ const obsidianConfig = reactive({
   export_mode: 'link',
   include_screenshots: false,
   include_video_link: true,
+  weekly_focus_weight: 60,
+  weekly_target_minutes: 2400,
   daily_template: '',
   session_template: ''
 })
@@ -1094,6 +1116,12 @@ const configLocationLabel = computed(() => {
   if (configLocation.source === 'env') return '环境变量'
   if (configLocation.source === 'pointer') return '便携配置'
   return '默认'
+})
+
+const weeklyEffortWeight = computed(() => {
+  const focus = Number(obsidianConfig.weekly_focus_weight || 0)
+  const clamped = Math.min(100, Math.max(0, focus))
+  return 100 - clamped
 })
 
 const loadingConfigLocation = ref(false)
@@ -1650,6 +1678,14 @@ const saveSettings = async () => {
     if (!obsidianConfigPayload.session_template || !obsidianConfigPayload.session_template.trim()) {
       obsidianConfigPayload.session_template = null
     }
+    obsidianConfigPayload.weekly_focus_weight = Math.min(
+      100,
+      Math.max(0, Number(obsidianConfigPayload.weekly_focus_weight || 0))
+    )
+    obsidianConfigPayload.weekly_target_minutes = Math.max(
+      1,
+      Number(obsidianConfigPayload.weekly_target_minutes || 2400)
+    )
 
     // 保存基础设置
     await store.updateConfig({
@@ -1857,6 +1893,12 @@ const initSettings = () => {
     obsidianConfig.export_mode = obsidian_config.export_mode || 'link'
     obsidianConfig.include_screenshots = obsidian_config.include_screenshots || false
     obsidianConfig.include_video_link = obsidian_config.include_video_link !== false
+    obsidianConfig.weekly_focus_weight = typeof obsidian_config.weekly_focus_weight === 'number'
+      ? obsidian_config.weekly_focus_weight
+      : 60
+    obsidianConfig.weekly_target_minutes = typeof obsidian_config.weekly_target_minutes === 'number'
+      ? obsidian_config.weekly_target_minutes
+      : 2400
     obsidianConfig.daily_template = obsidian_config.daily_template || ''
     obsidianConfig.session_template = obsidian_config.session_template || ''
   }

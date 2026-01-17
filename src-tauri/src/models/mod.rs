@@ -575,6 +575,10 @@ pub struct ObsidianExportConfig {
     pub include_screenshots: bool,
     /// 是否包含视频链接
     pub include_video_link: bool,
+    /// 周报专注评分权重（0-100）
+    pub weekly_focus_weight: u8,
+    /// 周报目标投入时长（分钟）
+    pub weekly_target_minutes: i64,
     /// 自定义每日模板（可选）
     pub daily_template: Option<String>,
     /// 自定义会话模板（可选）
@@ -590,6 +594,8 @@ impl Default for ObsidianExportConfig {
             export_mode: ObsidianExportMode::Link,
             include_screenshots: false,
             include_video_link: true,
+            weekly_focus_weight: 60,
+            weekly_target_minutes: 2400,
             daily_template: None,
             session_template: None,
         }
