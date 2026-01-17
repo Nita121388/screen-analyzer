@@ -193,6 +193,7 @@ struct ObsidianPreview {
     weekly_note_path: Option<String>,
     overview_path: Option<String>,
     month_index_path: Option<String>,
+    week_summary: Option<obsidian::WeekSummaryPreview>,
 }
 
 /// 获取 Obsidian 导出路径预览（不触发导出）
@@ -217,6 +218,7 @@ async fn get_obsidian_preview(
         weekly_note_path: None,
         overview_path: None,
         month_index_path: None,
+        week_summary: None,
     };
 
     if !obsidian_config.enabled || obsidian_config.vault_path.trim().is_empty() {
@@ -225,6 +227,14 @@ async fn get_obsidian_preview(
 
     let day = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
         .map_err(|e| format!("日期格式错误: {}", e))?;
+    let db = match state.storage_domain.get_db().await {
+        Ok(db) => db,
+        Err(err) => {
+            warn!("Obsidian 预览获取数据库失败: {}", err);
+            return Ok(preview);
+        }
+    };
+    let exporter = ObsidianExporter::new(obsidian_config.clone());
     let root_folder = obsidian_config.root_folder.trim();
     let root = if root_folder.is_empty() {
         PathBuf::from(&obsidian_config.vault_path)
@@ -269,6 +279,10 @@ async fn get_obsidian_preview(
             .to_string_lossy()
             .to_string(),
     );
+    match exporter.preview_week_summary(db.as_ref(), &date).await {
+        Ok(summary) => preview.week_summary = Some(summary),
+        Err(err) => warn!("构建周报预览失败: {}", err),
+    }
 
     Ok(preview)
 }

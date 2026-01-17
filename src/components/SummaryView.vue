@@ -66,6 +66,29 @@
             <span class="obsidian-label">周报</span>
             <span class="obsidian-value">{{ obsidianPreview.week_label }}</span>
           </div>
+          <div v-if="weekSummary" class="obsidian-metrics">
+            <div class="metric-card">
+              <span class="metric-label">专注占比</span>
+              <span class="metric-value">{{ weekSummary.focus_ratio }}%</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">投入评分</span>
+              <span class="metric-value">{{ weekSummary.effort_score }}</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">生产力</span>
+              <span class="metric-value">{{ weekSummary.productivity_score }}</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">本周时长</span>
+              <span class="metric-value">{{ formatMinutes(weekSummary.total_minutes) }}</span>
+              <span class="metric-sub">会话 {{ weekSummary.total_sessions }} 次</span>
+            </div>
+          </div>
+          <div v-if="weekSummary?.top_categories" class="obsidian-row">
+            <span class="obsidian-label">主要类别</span>
+            <span class="obsidian-value">{{ weekSummary.top_categories }}</span>
+          </div>
           <div class="obsidian-actions">
             <el-button
               size="small"
@@ -236,6 +259,19 @@ const refreshObsidianPreview = async () => {
 const obsidianEnabled = computed(() => {
   return obsidianPreview.value?.enabled ?? store.appConfig?.obsidian_config?.enabled ?? false
 })
+
+const weekSummary = computed(() => {
+  return obsidianPreview.value?.week_summary || null
+})
+
+const formatMinutes = (minutes) => {
+  if (minutes === null || minutes === undefined) return '-'
+  const total = Math.max(0, Math.round(minutes))
+  const hours = Math.floor(total / 60)
+  const mins = total % 60
+  if (hours === 0) return `${mins} 分钟`
+  return `${hours} 小时 ${mins} 分钟`
+}
 
 const openObsidian = async (path) => {
   if (!path) {
@@ -498,6 +534,41 @@ const getDeviceColor = (deviceName) => {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.obsidian-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.metric-card {
+  padding: 12px;
+  border-radius: 10px;
+  background: #202020;
+  border: 1px solid #2f2f2f;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #7a7a7a;
+}
+
+.metric-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+.metric-sub {
+  font-size: 12px;
+  color: #a0a0a0;
 }
 
 .hint-text {

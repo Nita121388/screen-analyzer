@@ -2,6 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -26,6 +27,27 @@ pub struct ExportOutcome {
     pub weekly_note_path: Option<PathBuf>,
     pub overview_path: Option<PathBuf>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WeekSummaryPreview {
+    pub week_label: String,
+    pub week_start: String,
+    pub week_end: String,
+    pub total_sessions: i32,
+    pub total_minutes: i32,
+    pub avg_session_minutes: i32,
+    pub top_categories: String,
+    pub focus_minutes: i64,
+    pub distraction_minutes: i64,
+    pub focus_ratio: i64,
+    pub distraction_ratio: i64,
+    pub focus_score: i64,
+    pub effort_score: i64,
+    pub productivity_score: i64,
+    pub focus_weight: i64,
+    pub effort_weight: i64,
+    pub target_minutes: i64,
 }
 
 impl ExportOutcome {
@@ -193,6 +215,47 @@ impl ObsidianExporter {
             weekly_note_path,
             overview_path,
             warnings,
+        })
+    }
+
+    pub async fn preview_week_summary(
+        &self,
+        db: &Database,
+        date: &str,
+    ) -> Result<WeekSummaryPreview> {
+        let summary = self.build_week_summary(db, date, &self.config).await?;
+        let focus_minutes = summary.focus_metrics.focus_minutes();
+        let distraction_minutes = summary.focus_metrics.distraction_minutes();
+        let focus_ratio = summary.focus_metrics.focus_ratio();
+        let distraction_ratio = summary.focus_metrics.distraction_ratio();
+        let focus_score = summary.focus_metrics.focus_score();
+        let effort_score = summary
+            .focus_metrics
+            .effort_score(summary.score_config.target_minutes);
+        let productivity_score = summary.focus_metrics.productivity_score(
+            summary.score_config.focus_weight,
+            summary.score_config.effort_weight,
+            summary.score_config.target_minutes,
+        );
+
+        Ok(WeekSummaryPreview {
+            week_label: summary.week_label,
+            week_start: summary.week_start,
+            week_end: summary.week_end,
+            total_sessions: summary.total_sessions,
+            total_minutes: summary.total_minutes,
+            avg_session_minutes: summary.avg_session_minutes,
+            top_categories: summary.top_categories,
+            focus_minutes,
+            distraction_minutes,
+            focus_ratio,
+            distraction_ratio,
+            focus_score,
+            effort_score,
+            productivity_score,
+            focus_weight: summary.score_config.focus_weight,
+            effort_weight: summary.score_config.effort_weight,
+            target_minutes: summary.score_config.target_minutes,
         })
     }
 
