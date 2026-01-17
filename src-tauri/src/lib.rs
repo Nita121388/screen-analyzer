@@ -605,16 +605,12 @@ async fn update_config(
         info!("LLM服务使用Qwen");
     }
 
-    // 更新截屏间隔
-    if let Some(capture_interval) = config.capture_interval {
-        // TODO: 更新调度器配置
-        info!("截屏间隔更新为: {}秒", capture_interval);
-    }
-
-    // 更新总结间隔
-    if let Some(summary_interval) = config.summary_interval {
-        // TODO: 更新调度器配置
-        info!("总结间隔更新为: {}分钟", summary_interval);
+    // 更新调度器配置
+    if config.capture_interval.is_some() || config.summary_interval.is_some() {
+        state.capture_domain.get_scheduler().configure(
+            updated_config.capture_interval,
+            updated_config.summary_interval,
+        );
     }
 
     // 更新截屏配置
@@ -770,11 +766,14 @@ async fn toggle_capture(state: tauri::State<'_, AppState>, enabled: bool) -> Res
 
     if enabled {
         info!("恢复截屏");
-        // TODO: 恢复调度器
     } else {
         info!("暂停截屏");
-        // TODO: 暂停调度器
     }
+
+    state
+        .capture_domain
+        .get_scheduler()
+        .set_capture_enabled(enabled);
 
     Ok(())
 }
@@ -2865,12 +2864,11 @@ pub fn run() {
                 );
 
                 // 初始化调度器
-                let mut scheduler_inner = CaptureScheduler::new(capture.clone());
-                scheduler_inner.configure(
+                let scheduler = Arc::new(CaptureScheduler::new(capture.clone()));
+                scheduler.configure(
                     initial_config.capture_interval,
                     initial_config.summary_interval,
                 );
-                let scheduler = Arc::new(scheduler_inner);
 
                 // 初始化系统状态（使用Actor模式，无需锁）
                 // 注意：Actor 不在此处启动，而是在后台任务的运行时中启动

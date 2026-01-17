@@ -7,8 +7,11 @@ use super::ScreenCapture;
 use crate::event_bus::{AppEvent, EventBus};
 use anyhow::{anyhow, Result};
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
+use tokio::time::Duration;
 use tracing::{debug, error, info, trace};
 
 /// 窗口跟踪器 - 用于跟踪已处理的窗口，防止内存泄漏
@@ -60,9 +63,11 @@ pub struct CaptureScheduler {
     /// 截屏管理器
     capture: Arc<ScreenCapture>,
     /// 截屏间隔（秒）
-    capture_interval: u64,
+    capture_interval: Arc<AtomicU64>,
     /// 会话时长（分钟）
-    session_duration: u64,
+    session_duration: Arc<AtomicU64>,
+    /// 是否启用截屏
+    capture_enabled: Arc<AtomicBool>,
 }
 
 impl CaptureScheduler {
@@ -70,35 +75,53 @@ impl CaptureScheduler {
     pub fn new(capture: Arc<ScreenCapture>) -> Self {
         Self {
             capture,
-            capture_interval: 1,  // 默认1秒一次（1 FPS）
-            session_duration: 15, // 默认15分钟一个会话
+            capture_interval: Arc::new(AtomicU64::new(1)), // 默认1秒一次（1 FPS）
+            session_duration: Arc::new(AtomicU64::new(15)), // 默认15分钟一个会话
+            capture_enabled: Arc::new(AtomicBool::new(true)),
         }
     }
 
     /// 配置调度参数
-    pub fn configure(&mut self, capture_interval: u64, session_duration: u64) {
-        self.capture_interval = capture_interval;
-        self.session_duration = session_duration;
+    pub fn configure(&self, capture_interval: u64, session_duration: u64) {
+        let capture_interval = capture_interval.max(1);
+        let session_duration = session_duration.max(1);
+        self.capture_interval
+            .store(capture_interval, Ordering::Relaxed);
+        self.session_duration
+            .store(session_duration, Ordering::Relaxed);
         info!(
             "调度器配置更新: 截屏间隔={}秒, 会话时长={}分钟",
             capture_interval, session_duration
         );
     }
 
+    /// 更新截屏启用状态
+    pub fn set_capture_enabled(&self, enabled: bool) {
+        self.capture_enabled.store(enabled, Ordering::Relaxed);
+    }
+
     /// 启动截屏任务
     pub fn start_capture_task(self: Arc<Self>) {
         let capture = self.capture.clone();
-        let interval_secs = self.capture_interval;
+        let interval_secs = self.capture_interval.clone();
+        let capture_enabled = self.capture_enabled.clone();
 
-        info!("准备启动截屏任务，间隔: {}秒", interval_secs);
+        info!(
+            "准备启动截屏任务，间隔: {}秒",
+            interval_secs.load(Ordering::Relaxed)
+        );
 
         // 直接在当前的异步上下文中生成任务
         tokio::task::spawn(async move {
-            info!("截屏任务已启动，间隔: {}秒", interval_secs);
-            let mut interval = interval(Duration::from_secs(interval_secs));
+            info!(
+                "截屏任务已启动，间隔: {}秒",
+                interval_secs.load(Ordering::Relaxed)
+            );
 
             // 立即执行第一次截屏（检查锁屏状态）
-            if super::ScreenCapture::is_screen_locked() {
+            if !capture_enabled.load(Ordering::Relaxed) {
+                trace!("截屏已暂停，跳过初始截屏");
+            } else if super::ScreenCapture::is_screen_locked() {
                 trace!("系统锁屏中，跳过初始截屏");
             } else {
                 match capture.capture_frame().await {
@@ -117,7 +140,13 @@ impl CaptureScheduler {
             }
 
             loop {
-                interval.tick().await;
+                let next_interval = interval_secs.load(Ordering::Relaxed).max(1);
+                tokio::time::sleep(Duration::from_secs(next_interval)).await;
+
+                if !capture_enabled.load(Ordering::Relaxed) {
+                    trace!("截屏已暂停，跳过截屏");
+                    continue;
+                }
 
                 // 检查锁屏状态
                 if super::ScreenCapture::is_screen_locked() {
@@ -145,7 +174,7 @@ impl CaptureScheduler {
     /// 启动会话处理任务(事件驱动版本)
     pub fn start_session_task(self: Arc<Self>, event_bus: Arc<EventBus>) {
         let capture = self.capture.clone();
-        let session_mins = self.session_duration;
+        let session_mins = self.session_duration.clone();
 
         tokio::task::spawn(async move {
             // 使用 WindowTracker 限制内存使用，最多保留 1000 个窗口记录
@@ -158,7 +187,7 @@ impl CaptureScheduler {
                 if let Err(e) = CaptureScheduler::scan_pending_sessions(
                     capture.clone(),
                     event_bus.clone(),
-                    session_mins,
+                    session_mins.load(Ordering::Relaxed).max(1),
                     &mut processed_windows,
                 )
                 .await
