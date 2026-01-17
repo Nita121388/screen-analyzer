@@ -174,7 +174,7 @@ async fn export_obsidian_day(
     let llm_handle = state.analysis_domain.get_llm_handle();
     let exporter = ObsidianExporter::new(obsidian_config);
     let result = exporter
-        .export_day(db, llm_handle, &date, force_refresh.unwrap_or(false))
+        .export_day(db, llm_handle.clone(), &date, force_refresh.unwrap_or(false))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -466,7 +466,7 @@ async fn import_config(
         .await
         .map_err(|e| format!("保存配置失败: {}", e))?;
 
-    let _ = update_config(state, persisted_to_app_config(config.clone())).await?;
+    let _ = update_config(state.clone(), persisted_to_app_config(config.clone())).await?;
 
     let mut warnings = Vec::new();
     if let Err(err) = apply_llm_config_from_persisted(&state, &config).await {
@@ -1593,6 +1593,7 @@ async fn configure_llm_provider(
         logger_settings: None,
         database_config: None,
         notion_config: None,
+        obsidian_config: None,
     };
 
     state
