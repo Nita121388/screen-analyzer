@@ -666,6 +666,12 @@ async fn get_app_config(state: tauri::State<'_, AppState>) -> Result<PersistedAp
     Ok(state.storage_domain.get_settings().get().await)
 }
 
+/// 获取支持的 LLM 提供商列表
+#[tauri::command]
+fn get_llm_providers() -> Vec<String> {
+    vec!["openai".to_string(), "claude".to_string(), "codex".to_string()]
+}
+
 /// 更新配置
 #[tauri::command]
 async fn update_config(
@@ -3372,6 +3378,7 @@ pub fn run() {
             reset_config_location,
             get_session_detail,
             get_app_config,
+            get_llm_providers,
             update_config,
             get_anthropic_env,
             add_manual_tag,
