@@ -213,6 +213,8 @@ npm run tauri build -- --target x86_64-unknown-linux-gnu
 5. **配置迁移**（可选）
    - 在“配置迁移”页面导出配置包（可选包含密钥）
    - 换机后导入配置包，建议再手动测试 LLM/数据库连接
+   - 便携模式：配置“便携路径”，重启后会读取该路径下的配置
+   - 环境变量：`SCREEN_ANALYZER_CONFIG_PATH` 可强制指定配置路径
 
 6. **数据库配置**（可选）
    - 默认使用本地 SQLite 数据库

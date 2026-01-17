@@ -17,6 +17,7 @@ pub mod video;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 // Actor模式不再需要Mutex和RwLock
 // use tokio::sync::{Mutex, RwLock};
@@ -178,6 +179,86 @@ async fn export_obsidian_day(
         .map_err(|e| e.to_string())?;
 
     Ok(result.render_message())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ConfigLocationPointer {
+    config_path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigLocationStatus {
+    current_path: String,
+    source: String,
+}
+
+fn normalize_config_path(path: &str, base_dir: &Path) -> PathBuf {
+    let trimmed = path.trim();
+    let mut normalized = if Path::new(trimmed).is_absolute() {
+        PathBuf::from(trimmed)
+    } else {
+        base_dir.join(trimmed)
+    };
+
+    if normalized
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        != "json"
+    {
+        normalized = normalized.join("config.json");
+    }
+
+    normalized
+}
+
+fn resolve_settings_path(app_dir: &Path) -> PathBuf {
+    if let Ok(raw_path) = std::env::var("SCREEN_ANALYZER_CONFIG_PATH") {
+        if !raw_path.trim().is_empty() {
+            return normalize_config_path(&raw_path, app_dir);
+        }
+    }
+
+    let pointer_path = app_dir.join("config-location.json");
+    if let Ok(bytes) = std::fs::read(&pointer_path) {
+        if let Ok(pointer) = serde_json::from_slice::<ConfigLocationPointer>(&bytes) {
+            if !pointer.config_path.trim().is_empty() {
+                return normalize_config_path(&pointer.config_path, app_dir);
+            }
+        }
+    }
+
+    app_dir.join("config.json")
+}
+
+fn detect_config_location(app_dir: &Path) -> ConfigLocationStatus {
+    if let Ok(raw_path) = std::env::var("SCREEN_ANALYZER_CONFIG_PATH") {
+        if !raw_path.trim().is_empty() {
+            let resolved = normalize_config_path(&raw_path, app_dir);
+            return ConfigLocationStatus {
+                current_path: resolved.to_string_lossy().to_string(),
+                source: "env".to_string(),
+            };
+        }
+    }
+
+    let pointer_path = app_dir.join("config-location.json");
+    if let Ok(bytes) = std::fs::read(&pointer_path) {
+        if let Ok(pointer) = serde_json::from_slice::<ConfigLocationPointer>(&bytes) {
+            if !pointer.config_path.trim().is_empty() {
+                let resolved = normalize_config_path(&pointer.config_path, app_dir);
+                return ConfigLocationStatus {
+                    current_path: resolved.to_string_lossy().to_string(),
+                    source: "pointer".to_string(),
+                };
+            }
+        }
+    }
+
+    ConfigLocationStatus {
+        current_path: app_dir.join("config.json").to_string_lossy().to_string(),
+        source: "default".to_string(),
+    }
 }
 
 fn resolve_config_path(app: &tauri::AppHandle, raw_path: &str) -> Result<PathBuf, String> {
@@ -399,6 +480,76 @@ async fn import_config(
     }
 
     Ok(message)
+}
+
+/// 获取当前配置路径
+#[tauri::command]
+async fn get_config_location(app: tauri::AppHandle) -> Result<ConfigLocationStatus, String> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取应用目录失败: {}", e))?;
+    Ok(detect_config_location(&app_dir))
+}
+
+/// 设置配置路径（便携模式）
+#[tauri::command]
+async fn set_config_location(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<String, String> {
+    if path.trim().is_empty() {
+        return Err("配置路径不能为空".to_string());
+    }
+
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取应用目录失败: {}", e))?;
+    let target_path = normalize_config_path(&path, &app_dir);
+
+    if let Some(parent) = target_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("创建配置目录失败: {}", e))?;
+    }
+
+    let current_config = state.storage_domain.get_settings().get().await;
+    let json = serde_json::to_string_pretty(&current_config).map_err(|e| e.to_string())?;
+    tokio::fs::write(&target_path, json)
+        .await
+        .map_err(|e| format!("写入配置失败: {}", e))?;
+
+    let pointer = ConfigLocationPointer {
+        config_path: target_path.to_string_lossy().to_string(),
+    };
+    let pointer_json = serde_json::to_string_pretty(&pointer).map_err(|e| e.to_string())?;
+    let pointer_path = app_dir.join("config-location.json");
+    tokio::fs::write(&pointer_path, pointer_json)
+        .await
+        .map_err(|e| format!("写入配置索引失败: {}", e))?;
+
+    Ok(format!(
+        "已设置配置路径: {}，请重启应用生效",
+        target_path.to_string_lossy()
+    ))
+}
+
+/// 恢复默认配置路径
+#[tauri::command]
+async fn reset_config_location(app: tauri::AppHandle) -> Result<String, String> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("获取应用目录失败: {}", e))?;
+    let pointer_path = app_dir.join("config-location.json");
+    if tokio::fs::metadata(&pointer_path).await.is_ok() {
+        tokio::fs::remove_file(&pointer_path)
+            .await
+            .map_err(|e| format!("删除配置索引失败: {}", e))?;
+    }
+    Ok("已恢复默认配置路径，请重启应用生效".to_string())
 }
 
 /// 获取会话详情
@@ -2659,8 +2810,10 @@ pub fn run() {
                 videos_dir_clone,
             ) = runtime.block_on(async {
                 // 先初始化设置管理器，以便读取数据库配置
+                let settings_path = resolve_settings_path(&app_dir);
+                info!("使用配置路径: {}", settings_path.to_string_lossy());
                 let settings = Arc::new(
-                    SettingsManager::new(app_dir.join("config.json"))
+                    SettingsManager::new(settings_path)
                         .await
                         .expect("设置管理器初始化失败"),
                 );
@@ -3122,6 +3275,9 @@ pub fn run() {
             export_obsidian_day,
             export_config,
             import_config,
+            get_config_location,
+            set_config_location,
+            reset_config_location,
             get_session_detail,
             get_app_config,
             update_config,

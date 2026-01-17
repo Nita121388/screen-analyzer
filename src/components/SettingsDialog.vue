@@ -868,6 +868,40 @@
             </el-form-item>
           </el-form>
         </div>
+
+        <div class="migration-section">
+          <h4>便携模式</h4>
+          <el-form :model="configLocation" label-width="140px">
+            <el-form-item label="当前配置">
+              <el-input v-model="configLocation.current_path" readonly />
+              <span class="form-tip">来源：{{ configLocationLabel }}</span>
+            </el-form-item>
+
+            <el-form-item label="便携路径">
+              <el-input
+                v-model="configLocation.desired_path"
+                placeholder="例如 D:\\ObsidianVault\\.screen-analyzer 或 /Users/me/Vault/.screen-analyzer"
+              />
+              <span class="form-tip">可填目录或文件，启用后需要重启生效</span>
+            </el-form-item>
+
+            <el-form-item label="操作">
+              <el-button
+                type="primary"
+                :loading="savingConfigLocation"
+                @click="applyConfigLocation"
+              >
+                启用便携模式
+              </el-button>
+              <el-button
+                :loading="resettingConfigLocation"
+                @click="resetConfigLocation"
+              >
+                恢复默认
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </div>
       </el-tab-pane>
 
       <!-- 关于 -->
@@ -1049,6 +1083,22 @@ const migrationConfig = reactive({
   include_secrets: false,
   allow_secrets: false
 })
+
+const configLocation = reactive({
+  current_path: '',
+  source: 'default',
+  desired_path: ''
+})
+
+const configLocationLabel = computed(() => {
+  if (configLocation.source === 'env') return '环境变量'
+  if (configLocation.source === 'pointer') return '便携配置'
+  return '默认'
+})
+
+const loadingConfigLocation = ref(false)
+const savingConfigLocation = ref(false)
+const resettingConfigLocation = ref(false)
 
 const testingNotion = ref(false)
 const loadingAnthropicEnv = ref(false)
@@ -1485,10 +1535,88 @@ const importConfig = async () => {
     ElMessage.success(result)
     await store.fetchAppConfig()
     initSettings()
+    loadConfigLocation()
   } catch (error) {
     ElMessage.error('导入配置失败: ' + error)
   } finally {
     importingConfig.value = false
+  }
+}
+
+const loadConfigLocation = async () => {
+  loadingConfigLocation.value = true
+  try {
+    const status = await invoke('get_config_location')
+    configLocation.current_path = status.current_path || ''
+    configLocation.source = status.source || 'default'
+    if (!configLocation.desired_path) {
+      configLocation.desired_path = configLocation.current_path
+    }
+  } catch (error) {
+    ElMessage.error('读取配置路径失败: ' + error)
+  } finally {
+    loadingConfigLocation.value = false
+  }
+}
+
+const applyConfigLocation = async () => {
+  if (!configLocation.desired_path || !configLocation.desired_path.trim()) {
+    ElMessage.warning('请先填写便携路径')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '启用便携模式会将当前配置写入新路径，并在重启后生效。',
+      '便携模式确认',
+      {
+        confirmButtonText: '确认启用',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch (error) {
+    return
+  }
+
+  savingConfigLocation.value = true
+  try {
+    const result = await invoke('set_config_location', {
+      path: configLocation.desired_path.trim()
+    })
+    ElMessage.success(result)
+    await loadConfigLocation()
+  } catch (error) {
+    ElMessage.error('启用便携模式失败: ' + error)
+  } finally {
+    savingConfigLocation.value = false
+  }
+}
+
+const resetConfigLocation = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将恢复默认配置路径，并在重启后生效。',
+      '恢复默认确认',
+      {
+        confirmButtonText: '确认恢复',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch (error) {
+    return
+  }
+
+  resettingConfigLocation.value = true
+  try {
+    const result = await invoke('reset_config_location')
+    ElMessage.success(result)
+    await loadConfigLocation()
+  } catch (error) {
+    ElMessage.error('恢复默认失败: ' + error)
+  } finally {
+    resettingConfigLocation.value = false
   }
 }
 
@@ -1739,6 +1867,7 @@ watch(dialogVisible, (newVal) => {
   if (newVal) {
     initSettings()
     refreshStorageStats()
+    loadConfigLocation()
   }
 })
 
