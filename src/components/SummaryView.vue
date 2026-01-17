@@ -37,6 +37,70 @@
         </div>
       </section>
 
+      <!-- Obsidian 快捷 -->
+      <section class="summary-section obsidian-section">
+        <div class="section-header">
+          <h3 class="section-title">Obsidian 快捷</h3>
+          <el-button
+            size="small"
+            plain
+            :loading="obsidianLoading"
+            @click="refreshObsidianPreview"
+          >
+            刷新
+          </el-button>
+        </div>
+        <div v-if="!obsidianEnabled" class="empty-text">
+          未启用 Obsidian 导出，请在设置中开启。
+        </div>
+        <div v-else>
+          <div class="obsidian-row">
+            <span class="obsidian-label">Vault</span>
+            <span class="obsidian-value">{{ obsidianPreview?.vault_path || '未配置' }}</span>
+          </div>
+          <div v-if="obsidianPreview?.root_path" class="obsidian-row">
+            <span class="obsidian-label">根目录</span>
+            <span class="obsidian-value">{{ obsidianPreview.root_path }}</span>
+          </div>
+          <div v-if="obsidianPreview?.week_label" class="obsidian-row">
+            <span class="obsidian-label">周报</span>
+            <span class="obsidian-value">{{ obsidianPreview.week_label }}</span>
+          </div>
+          <div class="obsidian-actions">
+            <el-button
+              size="small"
+              :disabled="!obsidianPreview?.weekly_note_path"
+              @click="openObsidian(obsidianPreview?.weekly_note_path)"
+            >
+              打开周报
+            </el-button>
+            <el-button
+              size="small"
+              :disabled="!obsidianPreview?.week_index_path"
+              @click="openObsidian(obsidianPreview?.week_index_path)"
+            >
+              打开周索引
+            </el-button>
+            <el-button
+              size="small"
+              :disabled="!obsidianPreview?.overview_path"
+              @click="openObsidian(obsidianPreview?.overview_path)"
+            >
+              打开总览
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="exportingObsidian"
+              @click="exportObsidian"
+            >
+              导出今日
+            </el-button>
+          </div>
+          <p class="hint-text">首次导出后会生成周报与索引文件。</p>
+        </div>
+      </section>
+
     <!-- Device Overview Cards -->
     <section class="summary-section device-stats-section" v-if="deviceStats.length > 0">
       <div class="device-cards-grid">
@@ -107,6 +171,7 @@ import { useActivityStore } from '../stores/activity'
 import OSIcons from './icons/OSIcons.vue'
 import { Loading, Refresh } from '@element-plus/icons-vue'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-opener'
 import { ElMessage } from 'element-plus'
 
 const store = useActivityStore()
@@ -115,6 +180,9 @@ const store = useActivityStore()
 const summaryData = ref(null)
 const loading = ref(false)
 const refreshing = ref(false)
+const obsidianPreview = ref(null)
+const obsidianLoading = ref(false)
+const exportingObsidian = ref(false)
 
 // 获取总结数据
 const fetchSummary = async (forceRefresh = false) => {
@@ -146,10 +214,69 @@ const refreshSummary = async () => {
   }
 }
 
-// 监听日期变化，重新获取总结
+const fetchObsidianPreview = async () => {
+  obsidianLoading.value = true
+  try {
+    const data = await invoke('get_obsidian_preview', {
+      date: store.selectedDate
+    })
+    obsidianPreview.value = data
+  } catch (error) {
+    console.error('获取 Obsidian 预览失败:', error)
+    obsidianPreview.value = null
+  } finally {
+    obsidianLoading.value = false
+  }
+}
+
+const refreshObsidianPreview = async () => {
+  await fetchObsidianPreview()
+}
+
+const obsidianEnabled = computed(() => {
+  return obsidianPreview.value?.enabled ?? store.appConfig?.obsidian_config?.enabled ?? false
+})
+
+const openObsidian = async (path) => {
+  if (!path) {
+    ElMessage.warning('路径尚未生成，请先导出')
+    return
+  }
+  try {
+    await open(path)
+  } catch (error) {
+    ElMessage.error('打开失败: ' + error)
+  }
+}
+
+const exportObsidian = async () => {
+  if (!obsidianEnabled.value) {
+    ElMessage.warning('请先启用 Obsidian 导出')
+    return
+  }
+  exportingObsidian.value = true
+  try {
+    const result = await invoke('export_obsidian_day', {
+      date: store.selectedDate
+    })
+    ElMessage.success(result)
+    await fetchObsidianPreview()
+  } catch (error) {
+    ElMessage.error('导出失败: ' + error)
+  } finally {
+    exportingObsidian.value = false
+  }
+}
+
+// 监听日期变化，重新获取总结和 Obsidian 预览
 watch(() => store.selectedDate, () => {
   fetchSummary()
+  fetchObsidianPreview()
 }, { immediate: true })
+
+watch(() => store.appConfig?.obsidian_config, () => {
+  fetchObsidianPreview()
+}, { deep: true })
 
 // 活跃设备数量
 const activeDeviceCount = computed(() => {
@@ -298,6 +425,14 @@ const getDeviceColor = (deviceName) => {
   margin-bottom: 28px;
 }
 
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .section-title {
   margin: 0 0 16px 0;
   font-size: 17px;
@@ -326,6 +461,49 @@ const getDeviceColor = (deviceName) => {
   color: #666666;
   font-style: italic;
   font-size: 14px;
+}
+
+.obsidian-section {
+  padding: 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(31, 31, 31, 0.9), rgba(26, 26, 26, 0.9));
+  border: 1px solid #2f2f2f;
+}
+
+.obsidian-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.obsidian-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #7f7f7f;
+  flex-shrink: 0;
+}
+
+.obsidian-value {
+  font-size: 13px;
+  color: #d0d0d0;
+  text-align: right;
+  word-break: break-all;
+}
+
+.obsidian-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.hint-text {
+  margin-top: 10px;
+  color: #5f5f5f;
+  font-size: 12px;
 }
 
 /* Device Stats Cards */

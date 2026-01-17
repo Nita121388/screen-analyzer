@@ -181,6 +181,98 @@ async fn export_obsidian_day(
     Ok(result.render_message())
 }
 
+#[derive(Debug, Serialize)]
+struct ObsidianPreview {
+    enabled: bool,
+    vault_path: String,
+    root_folder: String,
+    root_path: Option<String>,
+    day_note_path: Option<String>,
+    week_label: Option<String>,
+    week_index_path: Option<String>,
+    weekly_note_path: Option<String>,
+    overview_path: Option<String>,
+    month_index_path: Option<String>,
+}
+
+/// 获取 Obsidian 导出路径预览（不触发导出）
+#[tauri::command]
+async fn get_obsidian_preview(
+    state: tauri::State<'_, AppState>,
+    date: String,
+) -> Result<ObsidianPreview, String> {
+    use chrono::Datelike;
+
+    let config = state.storage_domain.get_settings().get().await;
+    let obsidian_config = config.obsidian_config.unwrap_or_default();
+
+    let mut preview = ObsidianPreview {
+        enabled: obsidian_config.enabled,
+        vault_path: obsidian_config.vault_path.clone(),
+        root_folder: obsidian_config.root_folder.clone(),
+        root_path: None,
+        day_note_path: None,
+        week_label: None,
+        week_index_path: None,
+        weekly_note_path: None,
+        overview_path: None,
+        month_index_path: None,
+    };
+
+    if !obsidian_config.enabled || obsidian_config.vault_path.trim().is_empty() {
+        return Ok(preview);
+    }
+
+    let day = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|e| format!("日期格式错误: {}", e))?;
+    let root_folder = obsidian_config.root_folder.trim();
+    let root = if root_folder.is_empty() {
+        PathBuf::from(&obsidian_config.vault_path)
+    } else {
+        PathBuf::from(&obsidian_config.vault_path).join(root_folder)
+    };
+
+    let week = day.iso_week();
+    let week_label = format!("{:04}-W{:02}", week.year(), week.week());
+    let month_label = format!("{:04}-{:02}", day.year(), day.month());
+    let day_label = day.format("%Y-%m-%d").to_string();
+
+    preview.root_path = Some(root.to_string_lossy().to_string());
+    preview.day_note_path = Some(
+        root.join("Daily")
+            .join(format!("{}.md", day_label))
+            .to_string_lossy()
+            .to_string(),
+    );
+    preview.week_label = Some(week_label.clone());
+    preview.week_index_path = Some(
+        root.join("Index")
+            .join(format!("weeks-{}.md", week_label))
+            .to_string_lossy()
+            .to_string(),
+    );
+    preview.weekly_note_path = Some(
+        root.join("Weekly")
+            .join(format!("{}.md", week_label))
+            .to_string_lossy()
+            .to_string(),
+    );
+    preview.overview_path = Some(
+        root.join("Index")
+            .join("overview.md")
+            .to_string_lossy()
+            .to_string(),
+    );
+    preview.month_index_path = Some(
+        root.join("Index")
+            .join(format!("sessions-{}.md", month_label))
+            .to_string_lossy()
+            .to_string(),
+    );
+
+    Ok(preview)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ConfigLocationPointer {
     config_path: String,
@@ -3272,6 +3364,7 @@ pub fn run() {
             get_day_sessions,
             get_day_summary,
             export_obsidian_day,
+            get_obsidian_preview,
             export_config,
             import_config,
             get_config_location,
