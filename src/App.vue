@@ -197,9 +197,14 @@ const handleDateSelect = (date) => {
 }
 
 // 处理日期变化
-const handleDateChange = (date) => {
+const handleDateChange = async (date) => {
   store.selectedDate = date
-  store.fetchDaySessions(date)
+  await store.fetchDaySessions(date)
+  const current = dayjs(date)
+  await store.fetchActivities(
+    current.startOf('month').format('YYYY-MM-DD'),
+    current.endOf('month').format('YYYY-MM-DD')
+  )
 }
 
 // 处理导出
@@ -245,8 +250,11 @@ const refreshData = async () => {
   console.log('自动刷新数据...')
   // 刷新当天会话列表
   await store.fetchDaySessions(store.selectedDate)
-  // TODO: 刷新月度摘要 - 需要后端实现该API
-  // await store.fetchMonthlySummary(dayjs(store.selectedDate).format('YYYY-MM'))
+  // 刷新月度活动摘要（用于月度概览）
+  const current = dayjs(store.selectedDate)
+  const startDate = current.startOf('month').format('YYYY-MM-DD')
+  const endDate = current.endOf('month').format('YYYY-MM-DD')
+  await store.fetchActivities(startDate, endDate)
   // 如果有选中的会话，刷新会话详情
   if (store.selectedSession?.session?.id) {
     await store.fetchSessionDetail(store.selectedSession.session.id)

@@ -414,9 +414,12 @@ export const useActivityStore = defineStore('activity', {
 
     // 初始化
     async initialize() {
+      const current = dayjs(this.selectedDate)
+      const startDate = current.startOf('month').format('YYYY-MM-DD')
+      const endDate = current.endOf('month').format('YYYY-MM-DD')
       await Promise.all([
         this.fetchAppConfig(),
-        this.fetchActivities(),
+        this.fetchActivities(startDate, endDate),
         this.fetchSystemStatus(),
         this.fetchLLMProviders(),
         this.fetchDaySessions(this.selectedDate)

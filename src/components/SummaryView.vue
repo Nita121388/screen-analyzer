@@ -124,6 +124,36 @@
         </div>
       </section>
 
+      <!-- 本月概览 -->
+      <section class="summary-section monthly-section">
+        <div class="section-header">
+          <h3 class="section-title">本月概览</h3>
+          <span class="month-label">{{ monthLabel }}</span>
+        </div>
+        <div v-if="!monthSummary || monthSummary.totalSessions === 0" class="empty-text">
+          暂无月度数据
+        </div>
+        <div v-else class="monthly-metrics">
+          <div class="metric-card">
+            <span class="metric-label">会话总数</span>
+            <span class="metric-value">{{ monthSummary.totalSessions }}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">总时长</span>
+            <span class="metric-value">{{ formatMinutes(monthSummary.totalMinutes) }}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">日均时长</span>
+            <span class="metric-value">{{ formatMinutes(monthSummary.avgDailyMinutes) }}</span>
+            <span class="metric-sub">{{ monthSummary.dayCount }} 天有记录</span>
+          </div>
+          <div class="metric-card metric-wide">
+            <span class="metric-label">主要类别</span>
+            <span class="metric-value">{{ monthSummary.topCategories }}</span>
+          </div>
+        </div>
+      </section>
+
     <!-- Device Overview Cards -->
     <section class="summary-section device-stats-section" v-if="deviceStats.length > 0">
       <div class="device-cards-grid">
@@ -272,6 +302,59 @@ const formatMinutes = (minutes) => {
   if (hours === 0) return `${mins} 分钟`
   return `${hours} 小时 ${mins} 分钟`
 }
+
+const monthLabel = computed(() => {
+  if (!store.selectedDate) return ''
+  return store.selectedDate.slice(0, 7)
+})
+
+const monthSummary = computed(() => {
+  const label = monthLabel.value
+  if (!label) return null
+  const monthActivities = store.activities.filter(activity =>
+    activity.date?.startsWith(label)
+  )
+  if (monthActivities.length === 0) {
+    return {
+      totalSessions: 0,
+      totalMinutes: 0,
+      avgDailyMinutes: 0,
+      topCategories: '暂无',
+      dayCount: 0
+    }
+  }
+
+  const totalSessions = monthActivities.reduce((sum, activity) => {
+    return sum + (activity.session_count || 0)
+  }, 0)
+  const totalMinutes = monthActivities.reduce((sum, activity) => {
+    return sum + (activity.total_duration_minutes || 0)
+  }, 0)
+  const dayCount = monthActivities.length
+  const avgDailyMinutes = dayCount > 0 ? Math.round(totalMinutes / dayCount) : 0
+
+  const categoryCounts = new Map()
+  monthActivities.forEach(activity => {
+    const categories = activity.main_categories || []
+    categories.forEach(category => {
+      categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1)
+    })
+  })
+
+  const topCategories = Array.from(categoryCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([name, count]) => `${name}(${count})`)
+    .join('、')
+
+  return {
+    totalSessions,
+    totalMinutes,
+    avgDailyMinutes,
+    topCategories: topCategories || '暂无',
+    dayCount
+  }
+})
 
 const openObsidian = async (path) => {
   if (!path) {
@@ -569,6 +652,29 @@ const getDeviceColor = (deviceName) => {
 .metric-sub {
   font-size: 12px;
   color: #a0a0a0;
+}
+
+.monthly-section {
+  padding: 16px;
+  border-radius: 12px;
+  background: #191919;
+  border: 1px solid #2b2b2b;
+}
+
+.monthly-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.metric-wide {
+  grid-column: 1 / -1;
+}
+
+.month-label {
+  font-size: 12px;
+  color: #8a8a8a;
+  letter-spacing: 0.4px;
 }
 
 .hint-text {
